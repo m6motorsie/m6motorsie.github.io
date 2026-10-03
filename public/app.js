@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '70';
+const APP_VERSION = '71';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -345,7 +345,7 @@ function renderAll() {
 // ---------------------------------------------------------------------
 // Which tab a car shows in. Delivered is history; Loan takes the car out of
 // the normal flow until it comes back; a car with someone working on it (any
-// service "doing") is In prep; otherwise it's Sold or Stock.
+// service "doing") is In prep; otherwise it's Deliveries (tab key 'sold') or Stock.
 // Dent is NOT a place: it's a written to-do list (dent_since set) — the car
 // stays in its own tab and also appears on the Dent list.
 const isWorking = v => SERVICES.some(s => v.services.includes(s.key) && v[`${s.key}_state`] === 'doing');
@@ -1760,13 +1760,13 @@ async function clearPersonRecords(id, btn) {
   loadReport();
 }
 
-// One entry per person: their cars and count per service.
 // The Full Valet team = people with Full Valet ticked as their job on the Team
 // screen (Marcelo, Rimmas). They're always listed, even with 0 cars; Full
 // Valets marked by anyone else aren't paid and don't show.
 const payTeam = () => [...S.profiles.values()]
   .filter(p => PAY_SERVICES.some(s => (p.services ?? []).includes(s.key)));
 
+// One entry per person of the team: their cars and count per service.
 function reportPeople() {
   const people = new Map();
   for (const p of payTeam()) people.set(p.id, { id: p.id, name: p.display_name, items: [], counts: {} });
@@ -2186,7 +2186,7 @@ const HELP = [
       <li><b>◐ Amber</b> — someone is working on it (shows their name).</li>
       <li><b>✓ Green</b> — done (shows who and when).</li>
       <li><b>+ Faded</b> — not asked for on this car. Tap it to add it and start.</li></ul>
-    <p><b>Tap once when you start</b>, <b>tap again when you finish</b>. The job goes in <b>your name</b> — that’s what the pay report counts, so always use your own login.</p>
+    <p><b>Tap once when you start</b>, <b>tap again when you finish</b>. The job goes in <b>your name</b> — that’s what counts for pay (Full Valet) and for your monthly counter, so always use your own login.</p>
     <p>Tapped by mistake on a green one? Tap it twice to undo.</p>
     <p>🔒 A job someone else started or finished is theirs: only they (or a manager) can change it.</p>` },
   { id: 'tabs', title: 'What the tabs mean', tabs: ['stock', 'in_prep', 'sold', 'delivered'], body: `
@@ -2198,7 +2198,7 @@ const HELP = [
       <li><b>Loan</b> — cars lent to customers.</li>
       <li><b>Delivered</b> — history.</li></ul>
     <p>Swipe left / right on the list to change tab.</p>` },
-  { id: 'sold', title: 'Sold cars & the daily sheet', tabs: ['sold'], body: `
+  { id: 'sold', title: 'Deliveries & the daily sheet', tabs: ['sold'], body: `
     <p>The Deliveries tab groups the sold cars by delivery day: <b>Overdue</b>, <b>Today</b>, <b>Tomorrow</b>…</p>
     <p>Each morning the manager prints the day’s job sheet (<b>🖨 Print deliveries list</b>). Work top to bottom and tick ☐ as you go — and tap the job in the app too.</p>
     <p>Cars going out <b>today</b> have a red outline, and the red number on the Deliveries tab says how many.</p>
@@ -2218,7 +2218,7 @@ const HELP = [
   { id: 'admin', title: 'Adding & selling cars (managers)', tabs: ['stock'], admin: true, body: `
     <p><b>+ New stock</b> (Stock tab): plate, make, model, colour, <b>the services the car needs</b> (or <b>All</b>) and Urgent / On site / Due in. Already sold? Tick <b>Already sold</b>.</p>
     <p><b>Mark sold</b> on a stock car, or <b>+ Sold</b> on the Deliveries tab: pick the delivery date and time.</p>
-    <p>The <b>chart icon</b> is the pay report: tap <b>Last week</b> to see who did what.</p>` },
+    <p>The <b>chart icon</b> is the pay report: Full Valet cars per person, for <b>this month</b> (or this / last week). Print it before using the 🗑 to clear someone’s records.</p>` },
   { id: 'phone', title: 'Phone tips', tabs: [], body: `
     <ul><li><b>iPhone:</b> Safari → Share → <b>Add to Home Screen</b>. Open it from the icon.</li>
       <li><b>Notifications:</b> tap your initial (top right) → <b>Enable notifications</b>.</li>
