@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '71';
+const APP_VERSION = '72';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -741,14 +741,31 @@ function renderList() {
   $('#list').innerHTML = listHTML(S.tab);
 }
 
-// The list for any tab (used to draw the neighbouring tab while swiping)
+// The list for any tab (used to draw the neighbouring tab while swiping).
+// While searching, cars found in OTHER tabs are shown below too, under their
+// tab's name, so you don't have to go looking tab by tab.
 function listHTML(tab) {
   const current = S.tab;
-  S.tab = tab;
   try {
+    S.tab = tab;
     const list = visibleVehicles();
-    if (!list.length) return `<p class="empty">${S.search ? 'No vehicles match your search.' : EMPTY[tab]}</p>`;
-    return tab === 'sold' ? soldHTML(list) : tab === 'dent' ? dentHTML(list) : list.map(cardHTML).join('');
+    const here = !list.length ? ''
+      : tab === 'sold' ? soldHTML(list) : tab === 'dent' ? dentHTML(list) : list.map(cardHTML).join('');
+    if (!S.search) return here || `<p class="empty">${EMPTY[tab]}</p>`;
+
+    const shown = new Set(list.map(v => v.id));
+    const elsewhere = $$('.tabs button').map(b => b.dataset.tab)
+      .filter(t => t !== tab && t !== 'dent')  // Dent is only a list; its cars live in another tab
+      .map(t => { S.tab = t; return [t, visibleVehicles().filter(v => !shown.has(v.id))]; })
+      .filter(([, cars]) => cars.length);
+    if (!here && !elsewhere.length) return '<p class="empty">No vehicles match your search.</p>';
+    const groups = elsewhere.map(([t, cars]) => `<section class="deliv-group elsewhere">
+      <h3>${esc(TAB_TITLE[t])} <span class="count">${cars.length}</span>
+        <button type="button" class="link-btn" data-goto-tab="${t}">Open ${esc(TAB_TITLE[t])} ›</button></h3>
+      ${cars.map(cardHTML).join('')}
+    </section>`).join('');
+    return (here || `<p class="empty search-miss">Not in ${esc(TAB_TITLE[tab])}.</p>`)
+      + (groups ? `<p class="elsewhere-title">${here ? 'Also found in other tabs' : 'Found in other tabs'}</p>${groups}` : '');
   } finally {
     S.tab = current;
   }
@@ -911,6 +928,8 @@ function printCurrentList() {
 // Card actions
 // ---------------------------------------------------------------------
 async function onListClick(e) {
+  const go = e.target.closest('[data-goto-tab]');
+  if (go) { switchTab(go.dataset.gotoTab); window.scrollTo(0, 0); return; }
   const btn = e.target.closest('[data-act]');
   if (!btn) return;
   const id = btn.closest('[data-id]')?.dataset.id;
