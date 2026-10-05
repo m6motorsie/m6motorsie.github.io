@@ -641,3 +641,15 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 .issue-main span { overflow-wrap: anywhere; }
 .issue-btns { display: flex; gap: 6px; flex: none; }
 .issue-form { margin-top: 10px; }
+
+/* Work log: one quiet line on the card (latest entry), full list in a sheet */
+.worklog-line {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; cursor: pointer; font: inherit;
+  padding: 6px 10px; border-radius: 8px; border: 1px dashed var(--border); background: transparent;
+  color: var(--text); font-size: 13px;
+}
+.worklog-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.worklog-text small { color: var(--muted); white-space: nowrap; }
+.worklog-more { flex: none; font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+.work-row { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.work-main { flex: 1; min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; }

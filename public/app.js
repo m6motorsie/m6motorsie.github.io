@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '73';
+const APP_VERSION = '74';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -191,6 +191,8 @@ const S = {
   myMonth: null,            // my finished jobs this month (show_count), or null
   issues: new Map(),        // vehicle id → open issues (024_*.sql)
   issuesReady: false,
+  workLog: new Map(),       // vehicle id → work done, newest first (025_*.sql)
+  workLogReady: false,
 };
 
 const configured = !SUPABASE_URL.includes('YOUR-') && !SUPABASE_ANON_KEY.includes('YOUR-');
@@ -235,7 +237,19 @@ async function loadAll() {
   S.profiles = new Map(p.data.map(x => [x.id, x]));
   S.me = S.profiles.get(S.session.user.id) ?? null;
   S.vehicles = new Map(v.data.map(x => [x.id, x]));
-  await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMyMonth(), loadIssues()]);
+  await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMyMonth(), loadIssues(), loadWorkLog()]);
+}
+
+// Work done on cars, newest first. Loaded separately so the app still works
+// if the table doesn't exist yet.
+async function loadWorkLog() {
+  const { data, error } = await sb.from('vehicle_work_log').select('*').order('created_at', { ascending: false });
+  S.workLogReady = !error;
+  S.workLog = new Map();
+  for (const w of data ?? []) {
+    if (!S.workLog.has(w.vehicle_id)) S.workLog.set(w.vehicle_id, []);
+    S.workLog.get(w.vehicle_id).push(w);
+  }
 }
 
 // Open issues on cars (fixed ones drop off). Loaded separately so the app still
@@ -299,6 +313,11 @@ function subscribe() {
       await loadIssues();
       renderAll();
       refreshIssueSheet();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_work_log' }, async () => {
+      await loadWorkLog();
+      renderAll();
+      refreshWorkSheet();
     })
     .subscribe();
 }
@@ -513,6 +532,18 @@ const ISSUE_KINDS = {
 const openIssues = v => S.issues.get(v.id) ?? [];
 const issueText = i => `${ISSUE_KINDS[i.kind]?.label ?? i.kind}${clean(i.note) ? ` — ${clean(i.note)}` : ''}`;
 
+// Work log: one line on the card with the latest entry; tap for the full list
+const workLog = v => S.workLog.get(v.id) ?? [];
+function workLogHTML(v) {
+  const log = workLog(v);
+  if (!log.length) return '';
+  const last = log[0];
+  return `<button type="button" class="worklog-line" data-act="worklog" title="Tap to see all the work done on this car">
+    <span>🔧</span><span class="worklog-text"><strong>${esc(last.note)}</strong> <small>${esc(nameOf(last.created_by))} · ${esc(fmtDate(last.created_at, false))}</small></span>
+    ${log.length > 1 ? `<span class="worklog-more">+${log.length - 1}</span>` : ''}
+  </button>`;
+}
+
 function issuesHTML(v) {
   const list = openIssues(v);
   if (!list.length) return '';
@@ -668,6 +699,7 @@ function cardHTML(v) {
   else actions = edit + (isAdmin() ? b('loan', 'Loan') : '') + body + dent + (isAdmin() ? b('sell', 'Mark sold', 'primary') : '');
   const remove = isAdmin() && v.status !== 'delivered' ? `${b('remove', 'Delete', 'ghost danger')}<span class="spacer"></span>` : '';
   // Anyone on staff can note a problem (wheels, missing part…)
+  if (S.workLogReady && v.status !== 'delivered') actions = b('worklog', '🔧 Log') + actions;
   if (S.issuesReady && v.status !== 'delivered') actions = b('issues', openIssues(v).length ? `⚠ Issues (${openIssues(v).length})` : '+ Issue') + actions;
 
   // Red outline: urgent, going out today (or overdue), or a loan / bodyshop car that's late back
@@ -686,6 +718,7 @@ function cardHTML(v) {
     ${details ? `<dl class="details">${details}</dl>` : ''}
     ${clean(v.notes) ? `<div class="notes">${esc(v.notes)}</div>` : ''}
     ${issuesHTML(v)}
+    ${workLogHTML(v)}
     ${myServiceKeys().length ? `<div class="services">${SERVICES
       // Only the viewer's own jobs (see myServiceKeys); extras faded — delivered cars show what was done
       .filter(s => myServiceKeys().includes(s.key))
@@ -982,6 +1015,7 @@ async function onListClick(e) {
   if (act === 'sell') return isAdmin() && openVehicleForm({ vehicle: v, convert: true });
   if (act === 'photo') return openPhoto(v);
   if (act === 'issues') return openIssueSheet(v);
+  if (act === 'worklog') return openWorkSheet(v);
   if (act === 'loan') return isAdmin() && openHoldForm(v, act);  // loans are admin-only (also in the DB)
   if (act === 'dent') return canDent() && openHoldForm(v, act);
   if (act === 'bodyshop') return canBodyshop() && openBodyshopForm(v);
@@ -1134,6 +1168,71 @@ function openHoldForm(v, kind) {
   $('#dentRemove', form)?.addEventListener('click', () => { closeSheet(); dentDone(v); });
 }
 
+// Work log sheet: everything done on the car (newest first) + log new work.
+let workSheetFor = null;
+function openWorkSheet(v) {
+  workSheetFor = v.id;
+  const car = [v.make, v.model].map(clean).filter(Boolean).join(' ');
+  const sheet = openSheet(`<div class="form">
+    ${sheetHead('Work log')}
+    <div class="hold-car">${plateHTML(v)}<span class="muted">${esc(car)}</span></div>
+    ${v.status !== 'delivered' ? `<form id="workForm" class="form" novalidate>
+      <label>What did you do?<input name="work_note" autocomplete="off" placeholder="e.g. Grille wrapped, back diffuser sprayed"></label>
+      <p class="hint" style="margin:0">Your name and today’s date are added by themselves.</p>
+      <p class="form-error" id="workError" hidden></p>
+      <div class="sheet-actions" style="position:static"><button type="submit" class="btn primary">🔧 Log it</button></div>
+    </form>` : ''}
+    <div id="workList"></div>
+    <div class="sheet-actions"><button type="button" class="btn ghost" data-close>Close</button></div>
+  </div>`);
+  drawWorkList();
+
+  const form = $('#workForm', sheet);
+  if (form) form.onsubmit = async e => {
+    e.preventDefault();
+    const note = clean(form.elements.work_note.value);
+    const fail = msg => { const el = $('#workError', form); el.textContent = msg; el.hidden = false; };
+    if (!note) return fail('Write what you did.');
+    const btn = form.querySelector('[type=submit]');
+    btn.disabled = true;
+    const { error } = await sb.from('vehicle_work_log').insert({ vehicle_id: v.id, note });
+    btn.disabled = false;
+    if (error) return fail(errorText(error));
+    form.elements.work_note.value = '';
+    $('#workError', form).hidden = true;
+    await loadWorkLog();
+    renderAll();
+    drawWorkList();
+    toast('Logged');
+  };
+  $('#workList', sheet).addEventListener('click', async e => {
+    const b = e.target.closest('[data-work-del]');
+    if (!b || !confirmTap(b, 'Delete?')) return;
+    const { error } = await sb.from('vehicle_work_log').delete().eq('id', Number(b.dataset.workDel));
+    if (error) return toast(errorText(error), { error: true });
+    await loadWorkLog();
+    renderAll();
+    drawWorkList();
+  });
+}
+
+function drawWorkList() {
+  const box = $('#workList');
+  const v = S.vehicles.get(workSheetFor);
+  if (!box || !v) return;
+  const log = workLog(v);
+  box.innerHTML = log.length ? `<div class="section-label">Done on this car (${log.length})</div>` + log.map(w => `<div class="work-row">
+      <span>${w.issue_id ? '✅' : '🔧'}</span>
+      <span class="work-main"><strong>${esc(w.note)}</strong>
+        <small class="muted">${esc(nameOf(w.created_by))} · ${esc(fmtDate(w.created_at))}</small></span>
+      ${isAdmin() || w.created_by === S.me?.id ? `<button type="button" class="btn small ghost danger" data-work-del="${w.id}" aria-label="Delete">✕</button>` : ''}
+    </div>`).join('') : '<p class="muted" style="margin:10px 0 0">Nothing logged on this car yet.</p>';
+}
+
+function refreshWorkSheet() {
+  if (workSheetFor && $('#workList')) drawWorkList();
+}
+
 // Issues sheet: what's wrong with the car, mark fixed, add a new one.
 let issueSheetFor = null;
 function openIssueSheet(v) {
@@ -1188,13 +1287,13 @@ function openIssueSheet(v) {
     const { error } = b.dataset.do === 'delete' ? await q.delete().eq('id', id)
       : await q.update({ fixed_at: new Date().toISOString() }).eq('id', id);
     if (error) return toast(errorText(error), { error: true });
-    await loadIssues();
+    await Promise.all([loadIssues(), loadWorkLog()]);
     renderAll();
     drawIssueList();
     if (b.dataset.do === 'fixed') {
       toast('Marked as fixed', { action: { label: 'Undo', run: async () => {
         await sb.from('vehicle_issues').update({ fixed_at: null }).eq('id', id);
-        await loadIssues(); renderAll(); refreshIssueSheet();
+        await Promise.all([loadIssues(), loadWorkLog()]); renderAll(); refreshIssueSheet();
       } } });
     }
   });
@@ -2352,7 +2451,10 @@ const HELP = [
     <p><b>Delivery prep</b> (the sold-cars person): tap <b>▶ Start prep</b> when you take the car — the boss gets a notification — and <b>✓ Ready to go</b> when it’s done. When the customer takes it, tap <b>Delivered</b>.</p>` },
   { id: 'issues', title: 'Issues (wheels, missing parts…)', tabs: ['stock', 'sold', 'in_prep'], body: `
     <p>Found a problem on a car? Tap <b>+ Issue</b> on its card, pick what it is (<b>🛞 Wheels / alloys</b>, <b>🧩 Missing interior part</b>, <b>🎨 Scratch / paint</b> or <b>Other</b>) and write the details.</p>
-    <p>It shows on the card in orange for everyone until someone taps it and marks it <b>Fixed</b>.</p>` },
+    <p>It shows on the card in orange for everyone until someone taps it and marks it <b>Fixed</b> — then it goes on the car’s work log.</p>` },
+  { id: 'worklog', title: 'Work log (what was done)', tabs: ['stock', 'sold', 'in_prep', 'delivered'], body: `
+    <p>Did something on a car that isn’t one of the job bubbles (e.g. <i>grille wrapped</i>, <i>diffuser sprayed</i>)? Tap <b>🔧 Log</b> on its card and write it. Your name and the date are added by themselves.</p>
+    <p>The card shows the latest entry; tap it to see everything done on that car. Fixed issues are logged automatically.</p>` },
   { id: 'dent', title: 'Dent list', tabs: ['dent'], body: `
     <p>Tap <b>Dent</b> on a car, write what needs fixing and pick the <b>dent day</b>. The car stays where it is — it’s just added to the list.</p>
     <p>On the day, the manager prints the list from the <b>Dent</b> tab. When a car is fixed, tap <b>Done</b>.</p>` },
