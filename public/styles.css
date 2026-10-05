@@ -13,6 +13,7 @@
   --doing-bg: #fff3d6;    --doing-fg: #8a5a00;   --doing-bd: #f1c75b;
   --done-bg: #e3f5e9;     --done-fg: #16703a;    --done-bd: #7ccc98;
   --note-bg: #e8f0fe;     --note-fg: #1e3a8a;    --note-bd: #3b82f6;
+  --issue-bg: #fff1e6;    --issue-fg: #9a3412;   --issue-bd: #f97316;
   --urgent: #d8232a;
   --plate-bg: #ffffff;
   --plate-band: #1d4ed8;
@@ -32,6 +33,7 @@
     --doing-bg: #3a2f14;    --doing-fg: #f5c969;   --doing-bd: #7a5d1c;
     --done-bg: #173222;     --done-fg: #7fdca0;    --done-bd: #2f6b45;
     --note-bg: #16223a;     --note-fg: #c3d6ff;    --note-bd: #4f7fe0;
+    --issue-bg: #33200f;    --issue-fg: #fdba74;   --issue-bd: #ea580c;
     --shadow: 0 1px 2px rgba(0,0,0,.4);
     color-scheme: dark;
   }
@@ -625,3 +627,17 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 .list > .elsewhere-title { grid-column: 1 / -1; margin: 10px 2px -4px; font-size: 13px; font-weight: 700; color: var(--accent); }
 .list > .search-miss { padding: 14px 10px 4px; }
 .deliv-group.elsewhere h3 .link-btn { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 13px; }
+
+/* Issues on a car (orange): wheels, missing parts… — tap to see / mark fixed */
+.issues {
+  display: grid; gap: 4px; width: 100%; text-align: left; cursor: pointer; font: inherit;
+  padding: 7px 10px; border-radius: 8px; border: 0; border-left: 3px solid var(--issue-bd);
+  background: var(--issue-bg); color: var(--issue-fg); font-size: 13.5px; font-weight: 600;
+}
+.issue { display: flex; gap: 6px; align-items: baseline; overflow-wrap: anywhere; }
+.issue-icon { flex: none; }
+.issue-row { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.issue-main { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.issue-main span { overflow-wrap: anywhere; }
+.issue-btns { display: flex; gap: 6px; flex: none; }
+.issue-form { margin-top: 10px; }

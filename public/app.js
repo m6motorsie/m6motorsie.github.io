@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '72';
+const APP_VERSION = '73';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -189,6 +189,8 @@ const S = {
   supplies: [],
   suppliesReady: false,
   myMonth: null,            // my finished jobs this month (show_count), or null
+  issues: new Map(),        // vehicle id → open issues (024_*.sql)
+  issuesReady: false,
 };
 
 const configured = !SUPABASE_URL.includes('YOUR-') && !SUPABASE_ANON_KEY.includes('YOUR-');
@@ -233,7 +235,19 @@ async function loadAll() {
   S.profiles = new Map(p.data.map(x => [x.id, x]));
   S.me = S.profiles.get(S.session.user.id) ?? null;
   S.vehicles = new Map(v.data.map(x => [x.id, x]));
-  await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMyMonth()]);
+  await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMyMonth(), loadIssues()]);
+}
+
+// Open issues on cars (fixed ones drop off). Loaded separately so the app still
+// works if the table doesn't exist yet.
+async function loadIssues() {
+  const { data, error } = await sb.from('vehicle_issues').select('*').is('fixed_at', null).order('created_at');
+  S.issuesReady = !error;
+  S.issues = new Map();
+  for (const i of data ?? []) {
+    if (!S.issues.has(i.vehicle_id)) S.issues.set(i.vehicle_id, []);
+    S.issues.get(i.vehicle_id).push(i);
+  }
 }
 
 // Supplies requested by the team. Loaded separately so the app still works
@@ -280,6 +294,11 @@ function subscribe() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'supplies' }, async () => {
       await loadSupplies();
       renderAll();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_issues' }, async () => {
+      await loadIssues();
+      renderAll();
+      refreshIssueSheet();
     })
     .subscribe();
 }
@@ -484,6 +503,23 @@ function otherJobsHTML(v) {
 // with "+"; tapping it adds it to the car and starts it.
 const isExtra = (v, key) => !v.services.includes(key) && v[`${key}_state`] === 'pending';
 
+// Problems noted on a car until someone marks them fixed
+const ISSUE_KINDS = {
+  wheels:   { label: 'Wheels / alloys',       icon: '🛞', hint: 'e.g. front left alloy scuffed' },
+  interior: { label: 'Missing interior part', icon: '🧩', hint: 'e.g. parcel shelf, boot floor cover' },
+  scratch:  { label: 'Scratch / paint',       icon: '🎨', hint: 'e.g. scratch on rear bumper' },
+  other:    { label: 'Other',                 icon: '⚠️', hint: 'what’s wrong' },
+};
+const openIssues = v => S.issues.get(v.id) ?? [];
+const issueText = i => `${ISSUE_KINDS[i.kind]?.label ?? i.kind}${clean(i.note) ? ` — ${clean(i.note)}` : ''}`;
+
+function issuesHTML(v) {
+  const list = openIssues(v);
+  if (!list.length) return '';
+  return `<button type="button" class="issues" data-act="issues" title="Tap to see or mark fixed">${list.map(i =>
+    `<span class="issue"><span class="issue-icon">${ISSUE_KINDS[i.kind]?.icon ?? '⚠️'}</span>${esc(issueText(i))}</span>`).join('')}</button>`;
+}
+
 // A job someone else started or finished is theirs: only they or an admin can
 // finish, undo or change it (also enforced in the database, 020_*.sql).
 function jobOwner(v, key) {
@@ -631,6 +667,8 @@ function cardHTML(v) {
   }
   else actions = edit + (isAdmin() ? b('loan', 'Loan') : '') + body + dent + (isAdmin() ? b('sell', 'Mark sold', 'primary') : '');
   const remove = isAdmin() && v.status !== 'delivered' ? `${b('remove', 'Delete', 'ghost danger')}<span class="spacer"></span>` : '';
+  // Anyone on staff can note a problem (wheels, missing part…)
+  if (S.issuesReady && v.status !== 'delivered') actions = b('issues', openIssues(v).length ? `⚠ Issues (${openIssues(v).length})` : '+ Issue') + actions;
 
   // Red outline: urgent, going out today (or overdue), or a loan / bodyshop car that's late back
   const flagged = (v.status !== 'delivered' && v.urgent) || (sold && dueToday(v)) || (tab === 'loan' && v.loan_due && dayDiff(v.loan_due) < 0)
@@ -647,6 +685,7 @@ function cardHTML(v) {
     ${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}
     ${details ? `<dl class="details">${details}</dl>` : ''}
     ${clean(v.notes) ? `<div class="notes">${esc(v.notes)}</div>` : ''}
+    ${issuesHTML(v)}
     ${myServiceKeys().length ? `<div class="services">${SERVICES
       // Only the viewer's own jobs (see myServiceKeys); extras faded — delivered cars show what was done
       .filter(s => myServiceKeys().includes(s.key))
@@ -832,7 +871,8 @@ function printSoldList() {
       + (v.ready_state === 'done' ? '<br><strong>✓ READY TO GO</strong>'
         : v.ready_state === 'doing' ? `<br>Prep: ${esc(nameOf(v.ready_by))}` : '');
     const notes = [clean(v.notes), clean(v.mechanical_notes) && `Mechanical: ${clean(v.mechanical_notes)}`,
-      clean(v.vrt_nct) && `VRT/NCT: ${clean(v.vrt_nct)}`, inDent(v) && `Dent: ${clean(v.dent_notes) || 'on the dent list'}`]
+      clean(v.vrt_nct) && `VRT/NCT: ${clean(v.vrt_nct)}`, inDent(v) && `Dent: ${clean(v.dent_notes) || 'on the dent list'}`,
+      ...openIssues(v).map(i => `Issue: ${issueText(i)}`)]
       .filter(Boolean).map(esc).join('<br>');
     rows.push({ cells: [
       { html: plateCell(v), cls: 'plate-cell' },
@@ -941,6 +981,7 @@ async function onListClick(e) {
   if (act === 'edit') return isAdmin() && openVehicleForm({ vehicle: v });
   if (act === 'sell') return isAdmin() && openVehicleForm({ vehicle: v, convert: true });
   if (act === 'photo') return openPhoto(v);
+  if (act === 'issues') return openIssueSheet(v);
   if (act === 'loan') return isAdmin() && openHoldForm(v, act);  // loans are admin-only (also in the DB)
   if (act === 'dent') return canDent() && openHoldForm(v, act);
   if (act === 'bodyshop') return canBodyshop() && openBodyshopForm(v);
@@ -1091,6 +1132,93 @@ function openHoldForm(v, kind) {
     }
   };
   $('#dentRemove', form)?.addEventListener('click', () => { closeSheet(); dentDone(v); });
+}
+
+// Issues sheet: what's wrong with the car, mark fixed, add a new one.
+let issueSheetFor = null;
+function openIssueSheet(v) {
+  issueSheetFor = v.id;
+  const car = [v.make, v.model].map(clean).filter(Boolean).join(' ');
+  const sheet = openSheet(`<div class="form" id="issueSheet">
+    ${sheetHead('Issues')}
+    <div class="hold-car">${plateHTML(v)}<span class="muted">${esc(car)}</span></div>
+    <div id="issueList"></div>
+    <form id="issueForm" class="form issue-form" novalidate>
+      <div class="section-label">Add an issue</div>
+      <div class="pills">${Object.entries(ISSUE_KINDS).map(([k, x], n) =>
+        `<label class="pill"><input type="radio" name="kind" value="${k}" ${n === 0 ? 'checked' : ''}><span>${x.icon} ${esc(x.label)}</span></label>`).join('')}</div>
+      <label>Details<input name="note" autocomplete="off" placeholder="${esc(ISSUE_KINDS.wheels.hint)}"></label>
+      <p class="form-error" id="issueError" hidden></p>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" data-close>Close</button>
+        <button type="submit" class="btn primary">Add issue</button>
+      </div>
+    </form>
+  </div>`);
+  drawIssueList();
+
+  const form = $('#issueForm', sheet);
+  form.addEventListener('change', e => {
+    if (e.target.name === 'kind') form.elements.note.placeholder = ISSUE_KINDS[e.target.value].hint;
+  });
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const kind = form.querySelector('[name=kind]:checked').value;
+    const note = clean(form.elements.note.value);
+    const fail = msg => { const el = $('#issueError', form); el.textContent = msg; el.hidden = false; };
+    if (kind === 'other' && !note) return fail('Write what’s wrong.');
+    const btn = form.querySelector('[type=submit]');
+    btn.disabled = true;
+    const { error } = await sb.from('vehicle_issues').insert({ vehicle_id: v.id, kind, note });
+    btn.disabled = false;
+    if (error) return fail(errorText(error));
+    form.elements.note.value = '';
+    $('#issueError', form).hidden = true;
+    await loadIssues();
+    renderAll();
+    drawIssueList();
+    toast('Issue added');
+  };
+  $('#issueList', sheet).addEventListener('click', async e => {
+    const b = e.target.closest('[data-issue]');
+    if (!b) return;
+    const id = Number(b.dataset.issue);
+    if (b.dataset.do === 'delete' && !confirmTap(b, 'Delete?')) return;
+    const q = sb.from('vehicle_issues');
+    const { error } = b.dataset.do === 'delete' ? await q.delete().eq('id', id)
+      : await q.update({ fixed_at: new Date().toISOString() }).eq('id', id);
+    if (error) return toast(errorText(error), { error: true });
+    await loadIssues();
+    renderAll();
+    drawIssueList();
+    if (b.dataset.do === 'fixed') {
+      toast('Marked as fixed', { action: { label: 'Undo', run: async () => {
+        await sb.from('vehicle_issues').update({ fixed_at: null }).eq('id', id);
+        await loadIssues(); renderAll(); refreshIssueSheet();
+      } } });
+    }
+  });
+}
+
+function drawIssueList() {
+  const box = $('#issueList');
+  const v = S.vehicles.get(issueSheetFor);
+  if (!box || !v) return;
+  const list = openIssues(v);
+  box.innerHTML = list.length ? list.map(i => `<div class="issue-row">
+      <span class="issue-icon">${ISSUE_KINDS[i.kind]?.icon ?? '⚠️'}</span>
+      <span class="issue-main"><strong>${esc(ISSUE_KINDS[i.kind]?.label ?? i.kind)}</strong>${clean(i.note) ? `<span>${esc(i.note)}</span>` : ''}
+        <small class="muted">${esc(nameOf(i.created_by))} · ${esc(fmtDate(i.created_at))}</small></span>
+      <span class="issue-btns">
+        <button type="button" class="btn small accent" data-issue="${i.id}" data-do="fixed">${ICON.check} Fixed</button>
+        ${isAdmin() || i.created_by === S.me?.id ? `<button type="button" class="btn small ghost danger" data-issue="${i.id}" data-do="delete" aria-label="Delete">✕</button>` : ''}
+      </span>
+    </div>`).join('') : '<p class="muted" style="margin:6px 0">No open issues on this car.</p>';
+}
+
+// Someone else changed issues while the sheet is open: redraw it
+function refreshIssueSheet() {
+  if (issueSheetFor && $('#issueList')) drawIssueList();
 }
 
 // Bodyshop (panel beating & paint): the car goes out until "Back from bodyshop".
@@ -2222,6 +2350,9 @@ const HELP = [
     <p>Each morning the manager prints the day’s job sheet (<b>🖨 Print deliveries list</b>). Work top to bottom and tick ☐ as you go — and tap the job in the app too.</p>
     <p>Cars going out <b>today</b> have a red outline, and the red number on the Deliveries tab says how many.</p>
     <p><b>Delivery prep</b> (the sold-cars person): tap <b>▶ Start prep</b> when you take the car — the boss gets a notification — and <b>✓ Ready to go</b> when it’s done. When the customer takes it, tap <b>Delivered</b>.</p>` },
+  { id: 'issues', title: 'Issues (wheels, missing parts…)', tabs: ['stock', 'sold', 'in_prep'], body: `
+    <p>Found a problem on a car? Tap <b>+ Issue</b> on its card, pick what it is (<b>🛞 Wheels / alloys</b>, <b>🧩 Missing interior part</b>, <b>🎨 Scratch / paint</b> or <b>Other</b>) and write the details.</p>
+    <p>It shows on the card in orange for everyone until someone taps it and marks it <b>Fixed</b>.</p>` },
   { id: 'dent', title: 'Dent list', tabs: ['dent'], body: `
     <p>Tap <b>Dent</b> on a car, write what needs fixing and pick the <b>dent day</b>. The car stays where it is — it’s just added to the list.</p>
     <p>On the day, the manager prints the list from the <b>Dent</b> tab. When a car is fixed, tap <b>Done</b>.</p>` },
