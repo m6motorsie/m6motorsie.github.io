@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '76';
+const APP_VERSION = '77';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -395,6 +395,9 @@ const inDent = v => !!v.dent_since && v.status !== 'delivered';
 const inViewing = v => !!v.viewing_at && v.status !== 'delivered';
 const needsRefresh = v => inViewing(v) && v.refresh_state !== 'done';
 const canRefresh = () => !!S.me?.does_refresh;
+// Test drives: the sales team (profiles.can_testdrive) marks a car out / back
+const canTestdrive = () => !!S.me?.can_testdrive;
+const onTestdrive = v => !!v.testdrive_since && v.status !== 'delivered';
 // "Today 15:00", "Tomorrow 10:30", "Fri 9 Oct 11:00"
 function viewingLabel(v) {
   const d = new Date(v.viewing_at);
@@ -629,6 +632,16 @@ function readyStatusHTML(v) {
 // Viewings: a manager books one; the refresh people (profiles.does_refresh)
 // tap Start refresh → Refreshed, and the manager is told at each step.
 // ---------------------------------------------------------------------
+// Out on a test drive / back. Back puts "Test drive · 35 min" on the work log.
+async function setTestdrive(v, out) {
+  try {
+    await updateVehicle(v.id, { testdrive_since: out ? new Date().toISOString() : null });
+    if (!out) await loadWorkLog();
+    renderAll();
+    toast(out ? 'Out on a test drive' : 'Back from the test drive — added to the work log');
+  } catch (err) { toast(errorText(err), { error: true }); }
+}
+
 function refreshButtons(v) {
   if (!inViewing(v) || !canRefresh()) return '';
   const undo = label => `<button class="btn small ghost" data-act="unrefresh">${label}</button>`;
@@ -809,6 +822,9 @@ function cardHTML(v) {
     chips.push('<span class="chip body">AT BODYSHOP</span>');
     if (v.body_due) chips.push(`<span class="chip${late ? ' urgent' : ''}">${late ? 'OVERDUE · ' : ''}Back ${esc(dayName(v.body_due))}</span>`);
   }
+  if (onTestdrive(v)) {
+    chips.push(`<span class="chip testdrive">🚗 ON TEST DRIVE · ${esc(nameOf(v.testdrive_by))} · since ${esc(new Date(v.testdrive_since).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' }))}</span>`);
+  }
   if (inViewing(v)) {
     const today = dayDiff(inputDate(new Date(v.viewing_at))) <= 0;
     chips.push(`<span class="chip viewing${today ? ' soon' : ''}">👀 VIEWING · ${esc(viewingLabel(v))}</span>`);
@@ -865,6 +881,9 @@ function cardHTML(v) {
   if ('viewing_at' in v && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)) {  // (after 027_*.sql)
     actions = refreshButtons(v) + actions;
     if (isAdmin()) actions += b('viewing', inViewing(v) ? '👀 Viewing ✓' : '👀 Viewing');
+  }
+  if ('testdrive_since' in v && canTestdrive() && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)) {  // (after 028_*.sql)
+    actions = (onTestdrive(v) ? b('testback', `${ICON.check} Back from test drive`, 'accent') : b('testdrive', '🚗 Test drive')) + actions;
   }
   // Anyone on staff can note a problem (wheels, missing part…)
   if (S.workLogReady && v.status !== 'delivered') actions = b('worklog', '🔧 Log') + actions;
@@ -1194,6 +1213,7 @@ async function onListClick(e) {
   if (act === 'dentdone') return canDent() && dentDone(v);
 
   if (act === 'viewing') return isAdmin() && openViewingForm(v);
+  if (act === 'testdrive' || act === 'testback') return canTestdrive() && setTestdrive(v, act === 'testdrive');
   if (act === 'refresh') return cycleRefresh(v, btn);
   if (act === 'unrefresh') return cycleRefresh(v, btn, 'pending');
   if (act === 'ready') return cycleReady(v, btn);
@@ -1970,6 +1990,7 @@ function personTags(p) {
   if (p.sold_alerts) tags.push('<span class="tag alerts">🔔 Sold notifications</span>');
   if (p.can_dent) tags.push('<span class="tag dent">Dent</span>');
   if (p.can_bodyshop) tags.push('<span class="tag body">Bodyshop</span>');
+  if (p.can_testdrive) tags.push('<span class="tag sold">🚗 Test drives</span>');
   if (p.does_refresh) tags.push('<span class="tag alerts">🧽 Refresh</span>');
   if (p.loan_alerts) tags.push('<span class="tag alerts">🔔 Loan returns</span>');
   if (p.show_count) tags.push('<span class="tag">🏁 Counter</span>');
@@ -2018,6 +2039,9 @@ function openPerson(id) {
     <div class="section-label">Sold cars</div>
     ${sw('data-flag="sold_alerts"', p.sold_alerts, '🔔 Sold car notifications', 'Only notifications — no buttons. When prep starts or a car is ready, and the day’s list at 8am.')}
     ${sw('data-flag="handles_sold"', p.handles_sold, 'Start prep / Ready to go buttons', 'Only for the person who prepares sold cars (Ryann). Adds these buttons on every sold car.')}
+
+    ${'can_testdrive' in p ? `<div class="section-label">Test drives</div>
+    ${sw('data-flag="can_testdrive"', p.can_testdrive, '🚗 Test drives', 'Can mark a car out on a test drive and back (sales team).')}` : ''}
 
     ${'does_refresh' in p ? `<div class="section-label">Viewings</div>
     ${sw('data-flag="does_refresh"', p.does_refresh, '🧽 Refresh for viewings', 'Gets a notification when a viewing is booked, and the Start refresh / Refreshed buttons.')}` : ''}
@@ -2632,6 +2656,9 @@ const HELP = [
     <p>A manager taps <b>👀 Viewing</b> on a car and picks the day and time. The refresh team gets a notification, and the car goes to the top of Stock and on the <b>Viewings</b> tab.</p>
     <p>Refresh team: tap <b>▶ Start refresh</b> when you take the car and <b>✓ Refreshed</b> when it’s ready — the manager is told each time.</p>
     <p>After the viewing, the manager opens <b>👀 Viewing ✓</b> and taps <b>Viewing done</b>.</p>` },
+  { id: 'testdrive', title: 'Test drives (sales)', tabs: ['stock', 'sold'], body: `
+    <p>Sales team: tap <b>🚗 Test drive</b> on a car when it goes out — everyone sees <b>ON TEST DRIVE</b> with your name and the time. No customer details needed.</p>
+    <p>When it’s back, tap <b>✓ Back from test drive</b>. The drive is added to the car’s work log by itself.</p>` },
   { id: 'issues', title: 'Issues (wheels, missing parts…)', tabs: ['stock', 'sold', 'in_prep'], body: `
     <p>Found a problem on a car? Tap <b>+ Issue</b> on its card, pick what it is (<b>🛞 Wheels / alloys</b>, <b>🧩 Missing interior part</b>, <b>🎨 Scratch / paint</b> or <b>Other</b>) and write the details.</p>
     <p>It shows on the card in orange for everyone until someone taps it and marks it <b>Fixed</b> — then it goes on the car’s work log.</p>` },

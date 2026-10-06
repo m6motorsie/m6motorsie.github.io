@@ -663,3 +663,4 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
   .tabs { grid-template-columns: repeat(8, minmax(58px, 1fr)); overflow-x: auto; scrollbar-width: none; }
   .tabs::-webkit-scrollbar { display: none; }
 }
+.chip.testdrive { background: #6d28d9; border-color: #6d28d9; color: #fff; font-weight: 700; }
