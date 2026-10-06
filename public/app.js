@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '80';
+const APP_VERSION = '81';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -640,8 +640,9 @@ function readyStatusHTML(v) {
 }
 
 // ---------------------------------------------------------------------
-// Viewings: a manager books one; the refresh people (profiles.does_refresh)
-// tap Start refresh → Refreshed, and the manager is told at each step.
+// Viewings: the sales team (profiles.can_testdrive) books one; the refresh
+// people (profiles.does_refresh) tap Start refresh → Refreshed, and whoever
+// booked it is told at each step.
 // ---------------------------------------------------------------------
 // Out on a test drive / back. Back puts "Test drive · 35 min" on the work log.
 async function setTestdrive(v, out) {
@@ -683,8 +684,8 @@ async function cycleRefresh(v, btn, next = v.refresh_state === 'doing' ? 'done' 
   renderAll();
   try {
     await updateVehicle(v.id, { refresh_state: next });
-    toast(next === 'doing' ? 'Refresh started — the manager has been told'
-      : next === 'done' ? 'Refreshed ✓ — the manager has been told' : 'Back to refresh needed');
+    toast(next === 'doing' ? 'Refresh started — whoever booked the viewing has been told'
+      : next === 'done' ? 'Refreshed ✓ — whoever booked the viewing has been told' : 'Back to refresh needed');
   } catch (err) {
     S.vehicles.set(v.id, before);
     toast(errorText(err), { error: true });
@@ -888,10 +889,10 @@ function cardHTML(v) {
   }
   else actions = edit + (isAdmin() ? b('loan', 'Loan') : '') + body + dent + (isAdmin() ? b('sell', 'Mark sold', 'primary') : '');
   const remove = isAdmin() && v.status !== 'delivered' ? `${b('remove', 'Delete', 'ghost danger')}<span class="spacer"></span>` : '';
-  // Viewings: managers book them; the refresh people get Start refresh / Refreshed
+  // Viewings: the sales team books them; the refresh people get Start refresh / Refreshed
   if ('viewing_at' in v && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)) {  // (after 027_*.sql)
     actions = refreshButtons(v) + actions;
-    if (isAdmin()) actions += b('viewing', inViewing(v) ? '👀 Viewing ✓' : '👀 Viewing');
+    if (canTestdrive()) actions += b('viewing', inViewing(v) ? '👀 Viewing ✓' : '👀 Viewing');  // sales team (030_*.sql)
   }
   if ('testdrive_since' in v && canTestdrive() && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)) {  // (after 028_*.sql)
     actions = (onTestdrive(v) ? b('testback', `${ICON.check} Back from test drive`, 'accent') : b('testdrive', '🚗 Test drive')) + actions;
@@ -1002,7 +1003,7 @@ const EMPTY = {
   stock: 'No vehicles in stock.',
   in_prep: 'Nobody is working on a car right now. Tap a service on a car to start it.',
   sold: 'No sold cars waiting for delivery.',
-  viewing: 'No viewings booked. Managers tap “👀 Viewing” on a car to book one.',
+  viewing: 'No viewings booked. The sales team taps “👀 Viewing” on a car to book one.',
   dent: 'The dent list is empty. Tap “Dent” on a car to add it.',
   loan: 'No cars out on loan.',
   bodyshop: 'No cars at the bodyshop.',
@@ -1223,7 +1224,7 @@ async function onListClick(e) {
   if (act === 'release') return (v.hold === 'bodyshop' ? canBodyshop() : isAdmin()) && releaseHold(v);
   if (act === 'dentdone') return canDent() && dentDone(v);
 
-  if (act === 'viewing') return isAdmin() && openViewingForm(v);
+  if (act === 'viewing') return canTestdrive() && openViewingForm(v);
   if (act === 'testdrive' || act === 'testback') return canTestdrive() && setTestdrive(v, act === 'testdrive');
   if (act === 'refresh') return cycleRefresh(v, btn);
   if (act === 'unrefresh') return cycleRefresh(v, btn, 'pending');
@@ -2002,7 +2003,7 @@ function personTags(p) {
   if (p.sold_alerts) tags.push('<span class="tag alerts">🔔 Sold notifications</span>');
   if (p.can_dent) tags.push('<span class="tag dent">Dent</span>');
   if (p.can_bodyshop) tags.push('<span class="tag body">Bodyshop</span>');
-  if (p.can_testdrive) tags.push('<span class="tag sold">🚗 Test drives</span>');
+  if (p.can_testdrive) tags.push('<span class="tag sold">🚗 Sales</span>');
   if (p.does_refresh) tags.push('<span class="tag alerts">🧽 Refresh</span>');
   if (p.loan_alerts) tags.push('<span class="tag alerts">🔔 Loan returns</span>');
   if (p.show_count) tags.push('<span class="tag">🏁 Counter</span>');
@@ -2052,8 +2053,8 @@ function openPerson(id) {
     ${sw('data-flag="sold_alerts"', p.sold_alerts, '🔔 Sold car notifications', 'Only notifications — no buttons. When prep starts or a car is ready, and the day’s list at 8am.')}
     ${sw('data-flag="handles_sold"', p.handles_sold, 'Start prep / Ready to go buttons', 'Only for the person who prepares sold cars (Ryann). Adds these buttons on every sold car.')}
 
-    ${'can_testdrive' in p ? `<div class="section-label">Test drives</div>
-    ${sw('data-flag="can_testdrive"', p.can_testdrive, '🚗 Test drives', 'Can mark a car out on a test drive and back (sales team).')}` : ''}
+    ${'can_testdrive' in p ? `<div class="section-label">Sales</div>
+    ${sw('data-flag="can_testdrive"', p.can_testdrive, '🚗 Sales: test drives & viewings', 'Books viewings and marks a car out on a test drive and back.')}` : ''}
 
     ${'does_refresh' in p ? `<div class="section-label">Viewings</div>
     ${sw('data-flag="does_refresh"', p.does_refresh, '🧽 Refresh for viewings', 'Gets a notification when a viewing is booked, and the Start refresh / Refreshed buttons.')}` : ''}
@@ -2666,9 +2667,9 @@ const HELP = [
     <p>Cars going out <b>today</b> have a red outline, and the red number on the Deliveries tab says how many.</p>
     <p><b>Delivery prep</b> (the sold-cars person): tap <b>▶ Start prep</b> when you take the car — the boss gets a notification — and <b>✓ Ready to go</b> when it’s done. When the customer takes it, tap <b>Delivered</b>.</p>` },
   { id: 'viewing', title: 'Viewings & refresh', tabs: ['viewing'], body: `
-    <p>A manager taps <b>👀 Viewing</b> on a car and picks the day and time. The refresh team gets a notification, and the car goes to the top of Stock and on the <b>Viewings</b> tab.</p>
-    <p>Refresh team: tap <b>▶ Start refresh</b> when you take the car and <b>✓ Refreshed</b> when it’s ready — the manager is told each time.</p>
-    <p>After the viewing, the manager opens <b>👀 Viewing ✓</b> and taps <b>Viewing done</b>.</p>` },
+    <p>The sales team taps <b>👀 Viewing</b> on a car and picks the day and time. The refresh team gets a notification, and the car goes to the top of Stock and on the <b>Viewings</b> tab.</p>
+    <p>Refresh team: tap <b>▶ Start refresh</b> when you take the car and <b>✓ Refreshed</b> when it’s ready — whoever booked it is told each time.</p>
+    <p>After the viewing, the sales team opens <b>👀 Viewing ✓</b> and taps <b>Viewing done</b>.</p>` },
   { id: 'testdrive', title: 'Test drives (sales)', tabs: ['stock', 'sold'], body: `
     <p>Sales team: tap <b>🚗 Test drive</b> on a car when it goes out — everyone sees <b>ON TEST DRIVE</b> with your name and the time. No customer details needed.</p>
     <p>When it’s back, tap <b>✓ Back from test drive</b>. The drive is added to the car’s work log by itself.</p>` },
