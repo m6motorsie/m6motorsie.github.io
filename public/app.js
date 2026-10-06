@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '75';
+const APP_VERSION = '76';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -36,7 +36,7 @@ const COLOUR_HEX = Object.fromEntries(COLOURS.map(([n, h]) => [n.toLowerCase(), 
 
 // Tabs are views, not the database status (see tabOf): the DB status
 // 'in_prep' means "sold, not delivered yet".
-const TAB_TITLE = { stock: 'Stock', in_prep: 'In prep', sold: 'Deliveries', bodyshop: 'Bodyshop', dent: 'Dent', loan: 'Loan', delivered: 'Delivered' };
+const TAB_TITLE = { viewing: 'Viewings', stock: 'Stock', in_prep: 'In prep', sold: 'Deliveries', bodyshop: 'Bodyshop', dent: 'Dent', loan: 'Loan', delivered: 'Delivered' };
 
 const ICON = {
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
@@ -391,6 +391,15 @@ function renderAll() {
 // stays in its own tab and also appears on the Dent list.
 const isWorking = v => SERVICES.some(s => v.services.includes(s.key) && v[`${s.key}_state`] === 'doing');
 const inDent = v => !!v.dent_since && v.status !== 'delivered';
+// Viewings is a list too (like Dent): the car stays in its own tab as well
+const inViewing = v => !!v.viewing_at && v.status !== 'delivered';
+const needsRefresh = v => inViewing(v) && v.refresh_state !== 'done';
+const canRefresh = () => !!S.me?.does_refresh;
+// "Today 15:00", "Tomorrow 10:30", "Fri 9 Oct 11:00"
+function viewingLabel(v) {
+  const d = new Date(v.viewing_at);
+  return `${dayName(inputDate(d))} ${d.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}`;
+}
 
 function tabOf(v) {
   if (v.status === 'delivered') return 'delivered';
@@ -418,13 +427,14 @@ const untouched = v => SERVICES.every(s => (v[`${s.key}_state`] ?? 'pending') ==
 const workStage = v => (untouched(v) ? 0 : v.services.length && v.done_at ? 2 : 1);
 // The car is waiting for one of MY jobs (asked for on it and still to do)
 const needsMe = v => myServiceKeys().some(k => v.services.includes(k) && v[`${k}_state`] === 'pending');
-const onTab = (v, tab) => (tab === 'dent' ? inDent(v) : tabOf(v) === tab);
+const onTab = (v, tab) => (tab === 'dent' ? inDent(v) : tab === 'viewing' ? inViewing(v) : tabOf(v) === tab);
 
 function renderTabs() {
   const counts = Object.fromEntries(Object.keys(TAB_TITLE).map(t => [t, 0]));
   for (const v of S.vehicles.values()) {
     counts[tabOf(v)]++;
     if (inDent(v)) counts.dent++;
+    if (inViewing(v)) counts.viewing++;
   }
   for (const b of $$('.tabs button')) {
     b.setAttribute('aria-selected', b.dataset.tab === S.tab);
@@ -438,7 +448,7 @@ function renderTabs() {
   badge.title = `${today} to deliver today`;
   $('#purgeBtn').hidden = S.tab !== 'delivered';
   const print = $('#printBtn');
-  print.hidden = !isAdmin() || !['sold', 'dent', 'loan', 'bodyshop'].includes(S.tab);
+  print.hidden = !isAdmin() || !['sold', 'viewing', 'dent', 'loan', 'bodyshop'].includes(S.tab);
   print.textContent = `🖨 Print ${TAB_TITLE[S.tab]?.toLowerCase()} list`;
   const fab = $('#fab');
   // Adding stock and recording sales are admin-only (also enforced in the database)
@@ -459,12 +469,13 @@ function visibleVehicles() {
   const due = d => d ?? '9999-12-31';
   const sorts = {
     // Sold first, then urgent, then cars waiting for my job, then nothing done → under way → all done
-    stock: (a, b) => (isSold(b) - isSold(a)) || (b.urgent - a.urgent) || (needsMe(b) - needsMe(a))
+    stock: (a, b) => (needsRefresh(b) - needsRefresh(a)) || (isSold(b) - isSold(a)) || (b.urgent - a.urgent) || (needsMe(b) - needsMe(a))
       || (workStage(a) - workStage(b)) || (t(b.created_at) - t(a.created_at)),
     // Sold cars being worked on first (they're the priority), then by delivery date
     in_prep: (a, b) => (isSold(b) - isSold(a)) || (b.urgent - a.urgent) || due(a.delivery_date).localeCompare(due(b.delivery_date)),
     sold: (a, b) => due(a.delivery_date).localeCompare(due(b.delivery_date)) || (b.urgent - a.urgent)
       || clean(a.delivery_time).localeCompare(clean(b.delivery_time)),
+    viewing: (a, b) => t(a.viewing_at) - t(b.viewing_at),
     dent: (a, b) => due(a.dent_date).localeCompare(due(b.dent_date)) || (isSold(b) - isSold(a)) || (t(a.dent_since) - t(b.dent_since)),
     loan: (a, b) => due(a.loan_due).localeCompare(due(b.loan_due)),
     bodyshop: (a, b) => due(a.body_due).localeCompare(due(b.body_due)),
@@ -614,6 +625,151 @@ function readyStatusHTML(v) {
   return '';
 }
 
+// ---------------------------------------------------------------------
+// Viewings: a manager books one; the refresh people (profiles.does_refresh)
+// tap Start refresh → Refreshed, and the manager is told at each step.
+// ---------------------------------------------------------------------
+function refreshButtons(v) {
+  if (!inViewing(v) || !canRefresh()) return '';
+  const undo = label => `<button class="btn small ghost" data-act="unrefresh">${label}</button>`;
+  if (v.refresh_state === 'doing') return undo('Cancel') + `<button class="btn small accent" data-act="refresh">${ICON.check} Refreshed</button>`;
+  if (v.refresh_state === 'done') return undo('↺ Undo');
+  return `<button class="btn small primary" data-act="refresh">▶ Start refresh</button>`;
+}
+
+function refreshStatusHTML(v) {
+  if (!inViewing(v)) return '';
+  if (v.refresh_state === 'doing') {
+    return `<div class="ready-bar doing"><span class="ring half"></span> Refresh · <strong>${esc(nameOf(v.refresh_by))}</strong> since ${esc(fmtDate(v.refresh_started_at))}</div>`;
+  }
+  if (v.refresh_state === 'done') {
+    return `<div class="ready-bar done">${ICON.check} Refreshed · ${esc(nameOf(v.refresh_by))} · ${esc(fmtDate(v.refresh_at))}</div>`;
+  }
+  return `<div class="ready-bar todo">🧽 Refresh needed before the viewing${clean(v.viewing_note) ? ` · ${esc(v.viewing_note)}` : ''}</div>`;
+}
+
+async function cycleRefresh(v, btn, next = v.refresh_state === 'doing' ? 'done' : 'doing') {
+  if (!canRefresh()) return;
+  if (next === 'pending' && btn && !confirmTap(btn, 'Tap again to undo')) return;
+  const before = { ...v };
+  const now = new Date().toISOString();
+  S.vehicles.set(v.id, next === 'pending'
+    ? { ...v, refresh_state: 'pending', refresh_by: null, refresh_started_at: null, refresh_at: null }
+    : { ...v, refresh_state: next, refresh_by: v.refresh_by ?? S.me.id, refresh_started_at: v.refresh_started_at ?? now, refresh_at: next === 'done' ? now : null });
+  renderAll();
+  try {
+    await updateVehicle(v.id, { refresh_state: next });
+    toast(next === 'doing' ? 'Refresh started — the manager has been told'
+      : next === 'done' ? 'Refreshed ✓ — the manager has been told' : 'Back to refresh needed');
+  } catch (err) {
+    S.vehicles.set(v.id, before);
+    toast(errorText(err), { error: true });
+  }
+  renderAll();
+}
+
+function openViewingForm(v) {
+  const editing = inViewing(v);
+  const when = editing ? new Date(v.viewing_at) : new Date(Date.now() + 60 * 60 * 1000);
+  const time = editing ? when.toTimeString().slice(0, 5) : `${String(when.getHours()).padStart(2, '0')}:00`;
+  const car = [v.make, v.model].map(clean).filter(Boolean).join(' ');
+  const sheet = openSheet(`<form class="form" id="viewForm" novalidate>
+    ${sheetHead(editing ? 'Viewing' : 'Book a viewing')}
+    <div class="hold-car">${plateHTML(v)}<span class="muted">${esc(car)}</span></div>
+    <div class="grid2">
+      <label>Day<input type="date" name="view_day" value="${inputDate(when)}" required></label>
+      <label>Time<input type="time" name="view_time" value="${time}" required></label>
+    </div>
+    <label>Note (optional)<input name="view_note" value="${esc(v.viewing_note)}" placeholder="e.g. customer wants to see the boot space"></label>
+    <p class="hint" style="margin:0">The refresh team gets a notification, and you’ll be told when the car is refreshed.</p>
+    <p class="form-error" id="viewError" hidden></p>
+    <div class="sheet-actions">
+      ${editing ? `<button type="button" class="btn ghost danger" id="viewClear">Viewing done</button><span class="spacer"></span>` : ''}
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">${editing ? 'Save' : 'Book viewing'}</button>
+    </div>
+  </form>`);
+  const form = $('#viewForm', sheet);
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const f = form.elements;
+    const fail = msg => { const el = $('#viewError', form); el.textContent = msg; el.hidden = false; };
+    if (!f.view_day.value || !f.view_time.value) return fail('Pick the day and the time.');
+    const at = new Date(`${f.view_day.value}T${f.view_time.value}`);
+    const btn = form.querySelector('[type=submit]');
+    btn.disabled = true;
+    try {
+      await updateVehicle(v.id, { viewing_at: at.toISOString(), viewing_note: clean(f.view_note.value) });
+      closeSheet();
+      renderAll();
+      toast(editing ? 'Viewing saved' : 'Viewing booked — the refresh team has been told',
+        { action: { label: 'Show', run: () => followCard(v.id, 'viewing') } });
+    } catch (err) {
+      btn.disabled = false;
+      fail(errorText(err));
+    }
+  };
+  $('#viewClear', form)?.addEventListener('click', async e => {
+    if (!confirmTap(e.currentTarget, 'Tap again — viewing done')) return;
+    const undo = { viewing_at: v.viewing_at, viewing_note: v.viewing_note };
+    try {
+      await updateVehicle(v.id, { viewing_at: null });
+      closeSheet();
+      renderAll();
+      toast('Viewing done — taken off the list', { action: { label: 'Undo', run: async () => { await updateVehicle(v.id, undo); renderAll(); } } });
+    } catch (err) { fail(errorText(err)); }
+    function fail(msg) { const el = $('#viewError', form); el.textContent = msg; el.hidden = false; }
+  });
+}
+
+// Viewings tab: cards under day headings, earliest first
+function viewingGroup(v) {
+  const day = inputDate(new Date(v.viewing_at));
+  const diff = dayDiff(day);
+  const long = new Date(`${day}T00:00`).toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'short' });
+  if (diff < 0) return { key: 'past', title: 'Earlier — clear when done', cls: 'overdue' };
+  if (diff === 0) return { key: 'today', title: `Today — ${long}`, cls: 'today' };
+  if (diff === 1) return { key: 'tomorrow', title: `Tomorrow — ${long}`, cls: '' };
+  return { key: day, title: long, cls: '' };
+}
+
+function viewingHTML(list) {
+  const groups = new Map();
+  for (const v of list) {
+    const g = viewingGroup(v);
+    if (!groups.has(g.key)) groups.set(g.key, { ...g, items: [] });
+    groups.get(g.key).items.push(v);
+  }
+  return [...groups.values()].map(g => `<section class="deliv-group ${g.cls}">
+    <h3>${esc(g.title)} <span class="count">${g.items.length}</span></h3>
+    ${g.items.map(cardHTML).join('')}
+  </section>`).join('');
+}
+
+function printViewingList() {
+  const cars = [...S.vehicles.values()].filter(inViewing)
+    .sort((a, b) => new Date(a.viewing_at) - new Date(b.viewing_at));
+  if (!cars.length) return toast('No viewings booked.');
+  const rows = [];
+  let current = null;
+  for (const v of cars) {
+    const g = viewingGroup(v);
+    if (g.key !== current) { current = g.key; rows.push({ group: g.title }); }
+    rows.push({ cells: [
+      { html: esc(new Date(v.viewing_at).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })) },
+      { html: plateCell(v), cls: 'plate-cell' },
+      { html: carCell(v) },
+      { html: esc(v.viewing_note || ''), cls: 'notes-cell' },
+      { html: v.refresh_state === 'done' ? `<strong>✓ Refreshed</strong><br><small>${esc(nameOf(v.refresh_by))}</small>` : '<span class="tick">☐</span>' },
+    ] });
+  }
+  printDoc({
+    title: 'Viewings', summary: plural(cars.length, 'car'),
+    how: 'Refresh each car before its viewing. Tick ☐ when done — and tap Refreshed in the app.',
+    columns: ['Time', 'Plate', 'Car', 'Note', 'Refreshed'], rows,
+  });
+}
+
 // next: 'doing' / 'done', or 'pending' to undo (Cancel / ↺ Undo)
 async function cycleReady(v, btn, next = v.ready_state === 'doing' ? 'done' : 'doing') {
   if (!canReady()) return;
@@ -652,6 +808,10 @@ function cardHTML(v) {
     const late = v.body_due && dayDiff(v.body_due) < 0;
     chips.push('<span class="chip body">AT BODYSHOP</span>');
     if (v.body_due) chips.push(`<span class="chip${late ? ' urgent' : ''}">${late ? 'OVERDUE · ' : ''}Back ${esc(dayName(v.body_due))}</span>`);
+  }
+  if (inViewing(v)) {
+    const today = dayDiff(inputDate(new Date(v.viewing_at))) <= 0;
+    chips.push(`<span class="chip viewing${today ? ' soon' : ''}">👀 VIEWING · ${esc(viewingLabel(v))}</span>`);
   }
   if (inDent(v)) chips.push(`<span class="chip hold">DENT${v.dent_date ? ` · ${esc(dayName(v.dent_date))}` : ''}</span>`);
   if (sold && tab !== 'sold') chips.push('<span class="chip sold">SOLD</span>');
@@ -701,6 +861,11 @@ function cardHTML(v) {
   }
   else actions = edit + (isAdmin() ? b('loan', 'Loan') : '') + body + dent + (isAdmin() ? b('sell', 'Mark sold', 'primary') : '');
   const remove = isAdmin() && v.status !== 'delivered' ? `${b('remove', 'Delete', 'ghost danger')}<span class="spacer"></span>` : '';
+  // Viewings: managers book them; the refresh people get Start refresh / Refreshed
+  if ('viewing_at' in v && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)) {  // (after 027_*.sql)
+    actions = refreshButtons(v) + actions;
+    if (isAdmin()) actions += b('viewing', inViewing(v) ? '👀 Viewing ✓' : '👀 Viewing');
+  }
   // Anyone on staff can note a problem (wheels, missing part…)
   if (S.workLogReady && v.status !== 'delivered') actions = b('worklog', '🔧 Log') + actions;
   if (S.issuesReady && v.status !== 'delivered') actions = b('issues', openIssues(v).length ? `⚠ Issues (${openIssues(v).length})` : '+ Issue') + actions;
@@ -729,6 +894,7 @@ function cardHTML(v) {
       .map(s => serviceHTML(v, s.key)).join('')}</div>
     ${otherJobsHTML(v)}` : jobStatusHTML(v)}
     ${sold ? readyStatusHTML(v) : ''}
+    ${refreshStatusHTML(v)}
     <div class="card-actions">${remove}${actions}</div>
   </article>`;
 }
@@ -806,6 +972,7 @@ const EMPTY = {
   stock: 'No vehicles in stock.',
   in_prep: 'Nobody is working on a car right now. Tap a service on a car to start it.',
   sold: 'No sold cars waiting for delivery.',
+  viewing: 'No viewings booked. Managers tap “👀 Viewing” on a car to book one.',
   dent: 'The dent list is empty. Tap “Dent” on a car to add it.',
   loan: 'No cars out on loan.',
   bodyshop: 'No cars at the bodyshop.',
@@ -825,12 +992,13 @@ function listHTML(tab) {
     S.tab = tab;
     const list = visibleVehicles();
     const here = !list.length ? ''
-      : tab === 'sold' ? soldHTML(list) : tab === 'dent' ? dentHTML(list) : list.map(cardHTML).join('');
+      : tab === 'sold' ? soldHTML(list) : tab === 'viewing' ? viewingHTML(list)
+        : tab === 'dent' ? dentHTML(list) : list.map(cardHTML).join('');
     if (!S.search) return here || `<p class="empty">${EMPTY[tab]}</p>`;
 
     const shown = new Set(list.map(v => v.id));
     const elsewhere = $$('.tabs button').map(b => b.dataset.tab)
-      .filter(t => t !== tab && t !== 'dent')  // Dent is only a list; its cars live in another tab
+      .filter(t => t !== tab && t !== 'dent' && t !== 'viewing')  // lists only; their cars live in another tab
       .map(t => { S.tab = t; return [t, visibleVehicles().filter(v => !shown.has(v.id))]; })
       .filter(([, cars]) => cars.length);
     if (!here && !elsewhere.length) return '<p class="empty">No vehicles match your search.</p>';
@@ -997,7 +1165,7 @@ function printBodyshopList() {
 
 function printCurrentList() {
   if (!isAdmin()) return;
-  ({ sold: printSoldList, dent: printDentList, loan: printLoanList, bodyshop: printBodyshopList })[S.tab]?.();
+  ({ sold: printSoldList, viewing: printViewingList, dent: printDentList, loan: printLoanList, bodyshop: printBodyshopList })[S.tab]?.();
 }
 
 // ---------------------------------------------------------------------
@@ -1025,6 +1193,9 @@ async function onListClick(e) {
   if (act === 'release') return (v.hold === 'bodyshop' ? canBodyshop() : isAdmin()) && releaseHold(v);
   if (act === 'dentdone') return canDent() && dentDone(v);
 
+  if (act === 'viewing') return isAdmin() && openViewingForm(v);
+  if (act === 'refresh') return cycleRefresh(v, btn);
+  if (act === 'unrefresh') return cycleRefresh(v, btn, 'pending');
   if (act === 'ready') return cycleReady(v, btn);
   if (act === 'unready') return cycleReady(v, btn, 'pending');
   if (act === 'deliver') {
@@ -1799,6 +1970,7 @@ function personTags(p) {
   if (p.sold_alerts) tags.push('<span class="tag alerts">🔔 Sold notifications</span>');
   if (p.can_dent) tags.push('<span class="tag dent">Dent</span>');
   if (p.can_bodyshop) tags.push('<span class="tag body">Bodyshop</span>');
+  if (p.does_refresh) tags.push('<span class="tag alerts">🧽 Refresh</span>');
   if (p.loan_alerts) tags.push('<span class="tag alerts">🔔 Loan returns</span>');
   if (p.show_count) tags.push('<span class="tag">🏁 Counter</span>');
   if (!jobs.length && !p.handles_sold) tags.push('<span class="tag muted">Overview only</span>');
@@ -1846,6 +2018,9 @@ function openPerson(id) {
     <div class="section-label">Sold cars</div>
     ${sw('data-flag="sold_alerts"', p.sold_alerts, '🔔 Sold car notifications', 'Only notifications — no buttons. When prep starts or a car is ready, and the day’s list at 8am.')}
     ${sw('data-flag="handles_sold"', p.handles_sold, 'Start prep / Ready to go buttons', 'Only for the person who prepares sold cars (Ryann). Adds these buttons on every sold car.')}
+
+    ${'does_refresh' in p ? `<div class="section-label">Viewings</div>
+    ${sw('data-flag="does_refresh"', p.does_refresh, '🧽 Refresh for viewings', 'Gets a notification when a viewing is booked, and the Start refresh / Refreshed buttons.')}` : ''}
 
     ${'loan_alerts' in p ? `<div class="section-label">Loans</div>
     ${sw('data-flag="loan_alerts"', p.loan_alerts, '🔔 Back from loan notifications', 'A notification when a car comes back from loan, to get it ready again.')}` : ''}
@@ -2440,6 +2615,7 @@ const HELP = [
     <p>🔒 A job someone else started or finished is theirs: only they (or a manager) can change it.</p>` },
   { id: 'tabs', title: 'What the tabs mean', tabs: ['stock', 'in_prep', 'sold', 'delivered'], body: `
     <ul><li><b>Deliveries</b> — sold cars waiting for delivery, by delivery day.</li>
+      <li><b>Viewings</b> — cars booked for a viewing, by day and time, with their refresh.</li>
       <li><b>Stock</b> — cars not sold, nobody working on them. Urgent cars, then cars waiting for <b>your</b> job, then cars with nothing done yet are on top. A car that arrived <b>already sold</b> stays here (SOLD) until all its jobs are done, then moves to Deliveries.</li>
       <li><b>In prep</b> — someone is working on it right now. When the job is done it goes back to Stock (or to Deliveries).</li>
       <li><b>Bodyshop</b> — out for panel beating & paint.</li>
@@ -2452,6 +2628,10 @@ const HELP = [
     <p>Each morning the manager prints the day’s job sheet (<b>🖨 Print deliveries list</b>). Work top to bottom and tick ☐ as you go — and tap the job in the app too.</p>
     <p>Cars going out <b>today</b> have a red outline, and the red number on the Deliveries tab says how many.</p>
     <p><b>Delivery prep</b> (the sold-cars person): tap <b>▶ Start prep</b> when you take the car — the boss gets a notification — and <b>✓ Ready to go</b> when it’s done. When the customer takes it, tap <b>Delivered</b>.</p>` },
+  { id: 'viewing', title: 'Viewings & refresh', tabs: ['viewing'], body: `
+    <p>A manager taps <b>👀 Viewing</b> on a car and picks the day and time. The refresh team gets a notification, and the car goes to the top of Stock and on the <b>Viewings</b> tab.</p>
+    <p>Refresh team: tap <b>▶ Start refresh</b> when you take the car and <b>✓ Refreshed</b> when it’s ready — the manager is told each time.</p>
+    <p>After the viewing, the manager opens <b>👀 Viewing ✓</b> and taps <b>Viewing done</b>.</p>` },
   { id: 'issues', title: 'Issues (wheels, missing parts…)', tabs: ['stock', 'sold', 'in_prep'], body: `
     <p>Found a problem on a car? Tap <b>+ Issue</b> on its card, pick what it is (<b>🛞 Wheels / alloys</b>, <b>🧩 Missing interior part</b>, <b>🎨 Scratch / paint</b> or <b>Other</b>) and write the details.</p>
     <p>It shows on the card in orange for everyone until someone taps it and marks it <b>Fixed</b> — then it goes on the car’s work log.</p>` },

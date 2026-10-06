@@ -6,6 +6,8 @@
 //   ready_done  { vehicle_id }  a sold car is ready to go        → "sold alerts" people except who finished it
 //   morning     {}              8am Dublin: today's deliveries    → "sold alerts" people
 //   loan_returned { vehicle_id } a car is back from loan          → "loan alerts" people except who returned it
+//   viewing_booked { vehicle_id } a viewing was booked on a car   → refresh people except who booked it
+//   refresh_doing / refresh_done { vehicle_id } refresh started / done → who booked the viewing
 //
 // It trusts nothing in the request except the vehicle id: it reloads the data,
 // checks the event really just happened, and sends each announcement at most
@@ -125,6 +127,48 @@ async function loanReturned(vehicle_id: string) {
   }, { onlyUsers: (people ?? []).map((p) => p.id as string), exceptUser: v.loan_returned_by ?? undefined }));
 }
 
+// "Today 15:00", "Tomorrow 10:30" or "Fri 9 Oct 11:00" in Dublin time
+function whenOf(ts: string) {
+  const fmt = (d: Date, o: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-IE", { timeZone: TZ, ...o }).format(d);
+  const d = new Date(ts);
+  const day = fmt(d, { year: "numeric", month: "2-digit", day: "2-digit" });
+  const today = fmt(new Date(), { year: "numeric", month: "2-digit", day: "2-digit" });
+  const tomorrow = fmt(new Date(Date.now() + 864e5), { year: "numeric", month: "2-digit", day: "2-digit" });
+  const time = fmt(d, { hour: "2-digit", minute: "2-digit", hour12: false });
+  const label = day === today ? "Today" : day === tomorrow ? "Tomorrow" : fmt(d, { weekday: "short", day: "numeric", month: "short" });
+  return `${label} ${time}`;
+}
+
+async function viewingBooked(vehicle_id: string) {
+  const { data: v } = await db.from("vehicles").select("*").eq("id", vehicle_id).maybeSingle();
+  if (!v || !v.viewing_at) return json({ skipped: "no viewing" });
+  if (!(await claim(`viewing_booked:${vehicle_id}:${v.viewing_at}`))) return json({ skipped: "already sent" });
+  const { data: people } = await db.from("profiles").select("id").eq("does_refresh", true);
+  return json(await send({
+    title: `👀 Viewing ${whenOf(v.viewing_at)}: ${carOf(v)}`,
+    body: [plateOf(v), "refresh needed", v.viewing_note].filter(Boolean).join(" · "),
+    url: "./?tab=viewing",
+    tag: `viewing-${v.id}`,
+  }, { onlyUsers: (people ?? []).map((p) => p.id as string), exceptUser: v.viewing_by ?? undefined }));
+}
+
+async function refresh(vehicle_id: string, event: "refresh_doing" | "refresh_done") {
+  const { data: v } = await db.from("vehicles").select("*").eq("id", vehicle_id).maybeSingle();
+  const doing = event === "refresh_doing";
+  const ts = doing ? v?.refresh_started_at : v?.refresh_at;
+  if (!v || !v.viewing_at || v.refresh_state !== (doing ? "doing" : "done") || !recent(ts)) {
+    return json({ skipped: "no such change" });
+  }
+  if (!(await claim(`${event}:${vehicle_id}:${ts}`))) return json({ skipped: "already sent" });
+  const who = await nameOf(v.refresh_by);
+  return json(await send({
+    title: doing ? `🧽 ${who} started the refresh: ${carOf(v)}` : `✅ Refreshed: ${carOf(v)}`,
+    body: [plateOf(v), `viewing ${whenOf(v.viewing_at)}`, !doing && `by ${who}`].filter(Boolean).join(" · "),
+    url: "./?tab=viewing",
+    tag: `refresh-${v.id}`,
+  }, { onlyUsers: v.viewing_by ? [v.viewing_by] : [], exceptUser: v.refresh_by ?? undefined }));
+}
+
 async function morning() {
   const { date, hour } = dublinNow();
   if (hour !== 8) return json({ skipped: `it's ${hour}:00 in Dublin` });
@@ -154,5 +198,7 @@ Deno.serve(async (req) => {
   if (event === "new_stock") return newStock(vehicle_id);
   if (event === "ready_doing" || event === "ready_done") return ready(vehicle_id, event);
   if (event === "loan_returned") return loanReturned(vehicle_id);
+  if (event === "viewing_booked") return viewingBooked(vehicle_id);
+  if (event === "refresh_doing" || event === "refresh_done") return refresh(vehicle_id, event);
   return json({ error: "unknown event" }, 400);
 });
