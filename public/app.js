@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '78';
+const APP_VERSION = '79';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -224,6 +224,8 @@ const sb = configured
   : null;
 
 const isAdmin = () => !!S.me?.is_admin;
+// The Team screen is for the system admin (029_*.sql); until that runs, any admin
+const canManageTeam = () => (S.me && 'system_admin' in S.me ? !!S.me.system_admin : isAdmin());
 const nameOf = id => S.profiles.get(id)?.display_name || 'Someone';
 
 // ---------------------------------------------------------------------
@@ -370,6 +372,8 @@ function setView(view) {
 
 function renderAll() {
   document.body.classList.toggle('is-admin', isAdmin());
+  $('#teamBtn').hidden = !canManageTeam();
+  if (S.view === 'team' && !canManageTeam()) setView('main');
   $('#meBtn').textContent = initials(S.me?.display_name);
   const needed = (S.supplies ?? []).filter(s => s.status === 'needed').length;
   $('#suppliesBadge').textContent = needed || '';
@@ -1986,6 +1990,7 @@ function openNewPassword() {
 // The database enforces these too, and only admins can change them.
 function personTags(p) {
   const tags = [];
+  if (p.system_admin) tags.push('<span class="tag admin">🛠 System admin</span>');
   if (p.is_admin) tags.push('<span class="tag admin">Admin</span>');
   const jobs = SERVICES.filter(s => (p.services ?? []).includes(s.key)).map(s => s.label);
   if (jobs.length) tags.push(...jobs.map(j => `<span class="tag job">${esc(j)}</span>`));
@@ -2062,7 +2067,8 @@ function openPerson(id) {
     ${sw('data-flag="show_count"', p.show_count, '🏁 My cars this month', 'Shows them how many cars they’ve done this month, with the list.')}` : ''}
 
     <div class="section-label">Access</div>
-    ${sw('data-flag="is_admin"', p.is_admin, 'Admin', me ? 'You can’t remove your own admin.' : 'Adds and sells cars, edits, loans, Team and Pay report.', me)}
+    ${sw('data-flag="is_admin"', p.is_admin, 'Admin', me ? 'You can’t remove your own admin.' : 'Adds and sells cars, edits, loans, viewings and the Pay report.', me)}
+    ${'system_admin' in p ? sw('data-flag="system_admin"', p.system_admin, '🛠 System admin', me ? 'You can’t remove your own system admin.' : 'Sees this Team screen: sets up people, jobs, permissions and notifications.', me) : ''}
 
     <p class="person-saved muted" aria-live="polite"></p>
     <div class="sheet-actions"><button type="button" class="btn primary" data-close>Done</button></div>
@@ -2905,7 +2911,7 @@ function wireUi() {
   $('#fab').addEventListener('click', () => (S.tab === 'stock' ? openVehicleForm() : openSoldPicker()));
   $('#list').addEventListener('click', onListClick);
 
-  $('#teamBtn').addEventListener('click', () => setView('team'));
+  $('#teamBtn').addEventListener('click', () => canManageTeam() && setView('team'));
   $('#reportBtn').addEventListener('click', () => setView('report'));
   $('#trainingBtn').innerHTML = ICON.video;
   $('#trainingBtn').addEventListener('click', openTraining);
