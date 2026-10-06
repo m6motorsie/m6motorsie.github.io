@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '74';
+const APP_VERSION = '75';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -14,13 +14,16 @@ const PURGE_DAYS = 30;
 // can mark any service (who/when is recorded by the database).
 const SERVICES = [
   { key: 'first',      label: 'First Clean / Tar Remove' },
-  { key: 'decrome',    label: 'Window Tint / Dechrome' },
   { key: 'polish',     label: 'Polish / Compound' },
   { key: 'full',       label: 'Full Valet' },
-  { key: 'windscreen', label: 'Windscreen' },
 ];
-// No longer offered (the Bodyshop tab replaced it); kept only to name old records.
-const RETIRED_SERVICES = [{ key: 'repair', label: 'Repair / Body Shop' }];
+// No longer offered as job bubbles (the Bodyshop tab and the work log took
+// them over); kept only to name old records.
+const RETIRED_SERVICES = [
+  { key: 'decrome',    label: 'Window Tint / Dechrome' },
+  { key: 'windscreen', label: 'Windscreen' },
+  { key: 'repair',     label: 'Repair / Body Shop' },
+];
 const SERVICE = Object.fromEntries([...SERVICES, ...RETIRED_SERVICES].map(s => [s.key, s]));
 const NEXT_STATE = { pending: 'doing', doing: 'done', done: 'pending' };
 
