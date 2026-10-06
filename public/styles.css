@@ -151,7 +151,7 @@ main { max-width: 1280px; margin: 0 auto; }
 main .tabs, main .toolbar { max-width: 900px; margin-left: auto; margin-right: auto; }
 .tabs {
   position: sticky; top: 58px; z-index: 10;
-  display: grid; grid-template-columns: repeat(8, 1fr);
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
   background: var(--brand); padding: 0 8px;
 }
 .tabs button {
@@ -660,7 +660,7 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 .ready-bar.todo { background: var(--issue-bg); color: var(--issue-fg); border-color: var(--issue-bd); font-weight: 600; }
 /* 8 tabs: on phones the bar scrolls sideways instead of squeezing the labels */
 @media (max-width: 640px) {
-  .tabs { grid-template-columns: repeat(8, minmax(58px, 1fr)); overflow-x: auto; scrollbar-width: none; }
+  .tabs { grid-auto-columns: minmax(58px, 1fr); overflow-x: auto; scrollbar-width: none; }
   .tabs::-webkit-scrollbar { display: none; }
 }
 .chip.testdrive { background: #6d28d9; border-color: #6d28d9; color: #fff; font-weight: 700; }

@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '77';
+const APP_VERSION = '78';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -439,6 +439,9 @@ function renderTabs() {
     if (inDent(v)) counts.dent++;
     if (inViewing(v)) counts.viewing++;
   }
+  // Delivered (history) is for managers only
+  $('.tabs [data-tab=delivered]').hidden = !isAdmin();
+  if (S.tab === 'delivered' && !isAdmin()) S.tab = 'sold';
   for (const b of $$('.tabs button')) {
     b.setAttribute('aria-selected', b.dataset.tab === S.tab);
     $('.count', b).textContent = counts[b.dataset.tab];
@@ -1016,7 +1019,7 @@ function listHTML(tab) {
     if (!S.search) return here || `<p class="empty">${EMPTY[tab]}</p>`;
 
     const shown = new Set(list.map(v => v.id));
-    const elsewhere = $$('.tabs button').map(b => b.dataset.tab)
+    const elsewhere = $$('.tabs button:not([hidden])').map(b => b.dataset.tab)
       .filter(t => t !== tab && t !== 'dent' && t !== 'viewing')  // lists only; their cars live in another tab
       .map(t => { S.tab = t; return [t, visibleVehicles().filter(v => !shown.has(v.id))]; })
       .filter(([, cars]) => cars.length);
@@ -2709,7 +2712,7 @@ function wireSwipeTabs() {
   const track = $('#listTrack');
   let g = null;  // current gesture
 
-  const tabsInOrder = () => $$('.tabs button').map(b => b.dataset.tab);
+  const tabsInOrder = () => $$('.tabs button:not([hidden])').map(b => b.dataset.tab);
   const setX = (x, animate) => {
     track.style.transition = animate ? 'transform .22s ease-out' : 'none';
     track.style.transform = x ? `translate3d(${x}px, 0, 0)` : '';
