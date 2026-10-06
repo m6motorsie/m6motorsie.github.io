@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '79';
+const APP_VERSION = '80';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -399,6 +399,8 @@ const inDent = v => !!v.dent_since && v.status !== 'delivered';
 const inViewing = v => !!v.viewing_at && v.status !== 'delivered';
 const needsRefresh = v => inViewing(v) && v.refresh_state !== 'done';
 const canRefresh = () => !!S.me?.does_refresh;
+// The Viewings tab: the refresh team + the sales team (Glenio, Yann, Alan, Eanna, Derek)
+const canSeeViewings = () => !!(S.me?.does_refresh || S.me?.can_testdrive);
 // Test drives: the sales team (profiles.can_testdrive) marks a car out / back
 const canTestdrive = () => !!S.me?.can_testdrive;
 const onTestdrive = v => !!v.testdrive_since && v.status !== 'delivered';
@@ -446,6 +448,8 @@ function renderTabs() {
   // Delivered (history) is for managers only
   $('.tabs [data-tab=delivered]').hidden = !isAdmin();
   if (S.tab === 'delivered' && !isAdmin()) S.tab = 'sold';
+  $('.tabs [data-tab=viewing]').hidden = !canSeeViewings();
+  if (S.tab === 'viewing' && !canSeeViewings()) S.tab = 'sold';
   for (const b of $$('.tabs button')) {
     b.setAttribute('aria-selected', b.dataset.tab === S.tab);
     $('.count', b).textContent = counts[b.dataset.tab];
