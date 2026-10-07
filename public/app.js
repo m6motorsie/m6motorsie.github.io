@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '82';
+const APP_VERSION = '83';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -640,11 +640,9 @@ function readyStatusHTML(v) {
 }
 
 // ---------------------------------------------------------------------
-// Viewings: the sales team (profiles.can_testdrive) books one; the refresh
-// people (profiles.does_refresh) tap Start refresh → Refreshed, and whoever
-// booked it is told at each step.
+// Test drives: the sales team (profiles.can_testdrive) marks a car out / back.
+// Back puts "Test drive · 35 min" on the work log (done by the database).
 // ---------------------------------------------------------------------
-// Out on a test drive / back. Back puts "Test drive · 35 min" on the work log.
 async function setTestdrive(v, out) {
   try {
     await updateVehicle(v.id, { testdrive_since: out ? new Date().toISOString() : null });
@@ -654,6 +652,10 @@ async function setTestdrive(v, out) {
   } catch (err) { toast(errorText(err), { error: true }); }
 }
 
+// ---------------------------------------------------------------------
+// Viewings: the sales team books one; the refresh people (profiles.does_refresh)
+// tap Start refresh → Refreshed, and whoever booked it is told at each step.
+// ---------------------------------------------------------------------
 function refreshButtons(v) {
   if (!inViewing(v) || !canRefresh()) return '';
   const undo = label => `<button class="btn small ghost" data-act="unrefresh">${label}</button>`;
@@ -1994,7 +1996,10 @@ function openNewPassword() {
 //   loan_alerts  — gets a notification when a car is back from loan
 //   can_dent / can_bodyshop — may use Dent / Bodyshop
 //   show_count   — sees "my cars this month"
-//   is_admin     — adds / sells / edits cars, loans, Team and Pay report
+//   can_testdrive — sales team: books viewings, marks test drives
+//   does_refresh — refresh team: viewing notifications + Start refresh / Refreshed
+//   is_admin     — adds / sells / edits cars, loans, Delivered and Pay report
+//   system_admin — sees the Team screen (only a system admin can change it)
 // The database enforces these too, and only admins can change them.
 function personTags(p) {
   const tags = [];
@@ -2075,7 +2080,7 @@ function openPerson(id) {
     ${sw('data-flag="show_count"', p.show_count, '🏁 My cars this month', 'Shows them how many cars they’ve done this month, with the list.')}` : ''}
 
     <div class="section-label">Access</div>
-    ${sw('data-flag="is_admin"', p.is_admin, 'Admin', me ? 'You can’t remove your own admin.' : 'Adds and sells cars, edits, loans, viewings and the Pay report.', me)}
+    ${sw('data-flag="is_admin"', p.is_admin, 'Admin', me ? 'You can’t remove your own admin.' : 'Adds and sells cars, edits, loans, the Delivered tab and the Pay report.', me)}
     ${'system_admin' in p ? sw('data-flag="system_admin"', p.system_admin, '🛠 System admin', me ? 'You can’t remove your own system admin.' : 'Sees this Team screen: sets up people, jobs, permissions and notifications.', me) : ''}
 
     <p class="person-saved muted" aria-live="polite"></p>
