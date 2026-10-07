@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '83';
+const APP_VERSION = '84';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -962,7 +962,7 @@ function soldHTML(list) {
 
 // Dent day heading (screen and printed list)
 function dentGroup(v) {
-  if (!v.dent_date) return { key: 'none', title: 'No day set yet', cls: 'none' };
+  if (!v.dent_date) return { key: 'none', title: 'To do', cls: 'none' };
   const diff = dayDiff(v.dent_date);
   const long = new Date(`${v.dent_date}T00:00`).toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'short' });
   if (diff < 0) return { key: 'overdue', title: `Missed — was ${long}`, cls: 'overdue' };
@@ -1340,9 +1340,7 @@ function openHoldForm(v, kind) {
       <label>Customer name<input name="loan_to" value="${esc(v.loan_to)}" autocapitalize="words" required></label>
       <label>Phone<input name="loan_phone" type="tel" value="${esc(v.loan_phone)}" inputmode="tel"></label>
       <label>Back by<input name="loan_due" type="date" value="${esc(v.loan_due)}"></label>`
-    : `<label>What needs fixing<textarea name="dent_notes" rows="3" placeholder="e.g. rear left door, small dent on bonnet">${esc(v.dent_notes)}</textarea></label>
-      <label>Dent day<input name="dent_date" type="date" value="${esc(v.dent_date)}"></label>
-      <p class="hint" style="margin:0">The car stays where it is — it’s just added to the Dent list to print on that day.</p>`}
+    : `<label>Where is the dent?<textarea name="dent_notes" rows="3" placeholder="e.g. rear left door, small dent on bonnet">${esc(v.dent_notes)}</textarea></label>`}
     <p class="form-error" id="holdError" hidden></p>
     <div class="sheet-actions">
       ${!loan && editing ? `<button type="button" class="btn ghost danger" id="dentRemove">Take off list</button><span class="spacer"></span>` : ''}
@@ -1358,10 +1356,10 @@ function openHoldForm(v, kind) {
     const patch = loan
       ? { hold: 'loan', loan_to: clean(f.loan_to.value), loan_phone: clean(f.loan_phone.value),
           loan_due: f.loan_due.value || null, loan_since: editing ? v.loan_since : now }
-      : { dent_notes: clean(f.dent_notes.value), dent_date: f.dent_date.value || null, dent_since: editing ? v.dent_since : now };
+      : { dent_notes: clean(f.dent_notes.value), dent_since: editing ? v.dent_since : now };
     const fail = msg => { const el = $('#holdError', form); el.textContent = msg; el.hidden = false; };
     if (loan && !patch.loan_to) return fail('Enter the customer’s name.');
-    if (!loan && !patch.dent_notes) return fail('Write what needs fixing.');
+    if (!loan && !patch.dent_notes) return fail('Write where the dent is.');
     const btn = form.querySelector('[type=submit]');
     btn.disabled = true;
     try {
@@ -2688,7 +2686,7 @@ const HELP = [
     <p>Did something on a car that isn’t one of the job bubbles (e.g. <i>grille wrapped</i>, <i>diffuser sprayed</i>)? Tap <b>🔧 Log</b> on its card and write it. Your name and the date are added by themselves.</p>
     <p>The card shows the latest entry; tap it to see everything done on that car. Fixed issues are logged automatically.</p>` },
   { id: 'dent', title: 'Dent list', tabs: ['dent'], body: `
-    <p>Tap <b>Dent</b> on a car, write what needs fixing and pick the <b>dent day</b>. The car stays where it is — it’s just added to the list.</p>
+    <p>Tap <b>Dent</b> on a car and write where the dent is. The car stays where it is — it’s just added to the list.</p>
     <p>On the day, the manager prints the list from the <b>Dent</b> tab. When a car is fixed, tap <b>Done</b>.</p>` },
   { id: 'bodyshop', title: 'Bodyshop', tabs: ['bodyshop'], body: `
     <p>When a car goes out for panel beating & paint, tap <b>Bodyshop</b> on it, write what’s being done, which bodyshop and when it’s due back. It moves to the <b>Bodyshop</b> tab (red when overdue).</p>
