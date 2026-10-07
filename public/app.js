@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '88';
+const APP_VERSION = '89';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1738,6 +1738,10 @@ function openVehicleForm({ vehicle = null, sold = false, convert = false } = {})
       <label>Salesperson<input name="seller" value="${esc(v.seller)}" list="sellerList" autocapitalize="words"></label>
       <datalist id="sellerList">${sellers.map(s => `<option value="${esc(s)}">`).join('')}</datalist>
       <label>Mechanical<textarea name="mechanical_notes" rows="2">${esc(v.mechanical_notes)}</textarea></label></div>` : ''}
+    ${isNew && S.issuesReady ? `<div class="section-label">Issues on arrival (optional)</div>
+    <div class="pills" id="arrivalKinds">${Object.entries(ISSUE_KINDS).map(([k, x]) =>
+      `<label class="pill"><input type="checkbox" data-arrival="${k}"><span>${x.icon} ${esc(x.label)}</span></label>`).join('')}</div>
+    <div id="arrivalNotes" class="arrival-notes"></div>` : ''}
     <label>Notes<textarea name="notes" rows="2">${esc(v.notes)}</textarea></label>
     <p class="form-error" id="formError" hidden></p>
     <div class="sheet-actions">
@@ -1770,6 +1774,20 @@ function openVehicleForm({ vehicle = null, sold = false, convert = false } = {})
     form.elements.urgent.checked = e.target.checked;
     $('#saveBtn', form).textContent = e.target.checked ? 'Save as sold' : 'Save';
   });
+
+  // Issues on arrival: tick a kind → a box for its details appears
+  const arrivalNotes = $('#arrivalNotes', form);
+  $('#arrivalKinds', form)?.addEventListener('change', () => {
+    const typed = Object.fromEntries($$('[data-arrival-note]', form).map(i => [i.dataset.arrivalNote, i.value]));
+    arrivalNotes.innerHTML = $$('[data-arrival]:checked', form).map(b => {
+      const k = b.dataset.arrival, x = ISSUE_KINDS[k];
+      return `<label>${x.icon} ${esc(x.label)}<input data-arrival-note="${k}" value="${esc(typed[k] ?? '')}" placeholder="${esc(x.hint)}" autocomplete="off"></label>`;
+    }).join('');
+  });
+  const arrivalIssues = () => $$('[data-arrival]:checked', form).map(b => ({
+    kind: b.dataset.arrival,
+    note: clean($(`[data-arrival-note="${b.dataset.arrival}"]`, form)?.value),
+  }));
 
   $('#photoInput', form).addEventListener('change', e => {
     const file = e.target.files?.[0];
@@ -1814,6 +1832,8 @@ function openVehicleForm({ vehicle = null, sold = false, convert = false } = {})
       return showError(`${name} (${plates}) is already in the app — ${TAB_TITLE[tabOf(twin)]} tab. Use that one instead of adding it again.`);
     }
     if (isNew && !row.services.length) return showError('Choose the services this car needs (or tap All).');
+    const arrival = isNew ? arrivalIssues() : [];
+    if (arrival.some(i => i.kind === 'other' && !i.note)) return showError('Write what’s wrong for “Other”.');
     const soldNow = soldFields || !!$('#alreadySold', form)?.checked;
     if (soldNow) Object.assign(row, {
       delivery_date: f.delivery_date.value || null,
@@ -1838,6 +1858,13 @@ function openVehicleForm({ vehicle = null, sold = false, convert = false } = {})
         if (error) throw error;
         saved = data;
         upsertLocal(saved);
+        // Issues it arrived with go on the card straight away
+        if (arrival.length) {
+          const { error: issueError } = await sb.from('vehicle_issues')
+            .insert(arrival.map(i => ({ vehicle_id: saved.id, kind: i.kind, note: i.note })));
+          if (issueError) toast(`Car added, but the issues weren’t saved: ${errorText(issueError)}`, { error: true });
+          await loadIssues();
+        }
       } else {
         saved = await updateVehicle(v.id, row);
         if ((newFile || removePhoto) && v.photo_path) await removePhotos([v.photo_path]);
@@ -1846,7 +1873,7 @@ function openVehicleForm({ vehicle = null, sold = false, convert = false } = {})
       closeSheet();
       if (tabOf(saved) !== S.tab) switchTab(tabOf(saved));
       renderAll();
-      toast(convert ? 'Marked as sold' : isNew ? (soldNow ? 'Sold car added' : 'Vehicle added') : 'Saved');
+      toast(convert ? 'Marked as sold' : isNew ? `${soldNow ? 'Sold car added' : 'Vehicle added'}${arrival.length ? ` with ${plural(arrival.length, 'issue')}` : ''}` : 'Saved');
     } catch (err) {
       if (uploaded) await removePhotos([uploaded]);
       showError(errorText(err));
@@ -2637,7 +2664,7 @@ const HELP = [
     <p>Tap the <b>box icon</b> at the top, write what you need and how many, and tap <b>Add to list</b>.</p>
     <p>The manager marks it <b>Ordered</b>, and <b>Got it</b> when it arrives. The manager can print the list.</p>` },
   { id: 'admin', title: 'Adding & selling cars (managers)', tabs: ['stock'], admin: true, body: `
-    <p><b>+ New stock</b> (Stock tab): plate, make, model, colour, <b>the services the car needs</b> (or <b>All</b>) and Urgent / On site / Due in. Already sold? Tick <b>Already sold</b>.</p>
+    <p><b>+ New stock</b> (Stock tab): plate, make, model, colour, VRT / NCT, <b>the services the car needs</b> (or <b>All</b>) and Urgent / On site / Due in. Already sold? Tick <b>Already sold</b>. Scratches, scuffed wheels or missing parts? Tick them under <b>Issues on arrival</b>.</p>
     <p><b>Mark sold</b> on a stock car, or <b>+ Sold</b> on the Deliveries tab: pick the delivery date and time.</p>
     <p>The <b>chart icon</b> is the pay report: Full Valet cars per person, for <b>this month</b> (or this / last week). Print it before using the 🗑 to clear someone’s records.</p>` },
   { id: 'phone', title: 'Phone tips', tabs: [], body: `

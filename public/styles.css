@@ -664,3 +664,5 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
   .tabs::-webkit-scrollbar { display: none; }
 }
 .chip.testdrive { background: #6d28d9; border-color: #6d28d9; color: #fff; font-weight: 700; }
+.arrival-notes { display: grid; gap: 10px; }
+.arrival-notes:empty { display: none; }
