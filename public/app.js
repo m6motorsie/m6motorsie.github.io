@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '85';
+const APP_VERSION = '86';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -462,7 +462,7 @@ function renderTabs() {
   badge.title = `${today} to deliver today`;
   $('#purgeBtn').hidden = S.tab !== 'delivered';
   const print = $('#printBtn');
-  print.hidden = !isAdmin() || !['sold', 'dent', 'loan', 'bodyshop'].includes(S.tab);
+  print.hidden = !isAdmin() || !['sold', 'dent'].includes(S.tab);
   print.textContent = `🖨 Print ${TAB_TITLE[S.tab]?.toLowerCase()} list`;
   const fab = $('#fab');
   // Adding stock and recording sales are admin-only (also enforced in the database)
@@ -1026,7 +1026,7 @@ function listHTML(tab) {
 }
 
 // ---------------------------------------------------------------------
-// Printed lists (Sold / Dent / Loan)
+// Printed lists (Deliveries / Dent / Photos / Supplies)
 // ---------------------------------------------------------------------
 const carCell = v => `<strong>${esc([v.make, v.model].map(clean).filter(Boolean).join(' ') || 'Unknown vehicle')}</strong>${clean(v.color) ? `<br>${esc(v.color)}` : ''}`;
 const plateCell = v => [v.reg_ie, v.reg_imp].map(clean).filter(Boolean).map(esc).join('<br>')
@@ -1135,48 +1135,9 @@ function printDentList() {
   });
 }
 
-function printLoanList() {
-  const cars = [...S.vehicles.values()].filter(v => tabOf(v) === 'loan')
-    .sort((a, b) => (a.loan_due ?? '9999').localeCompare(b.loan_due ?? '9999'));
-  if (!cars.length) return toast('No cars out on loan.');
-  printDoc({
-    title: 'Loan cars', summary: plural(cars.length, 'car') + ' out',
-    how: 'Earliest return first. Overdue cars are marked.',
-    columns: ['Plate', 'Car', 'Customer', 'Phone', 'Out since', 'Back by'],
-    rows: cars.map(v => ({ cells: [
-      { html: plateCell(v), cls: 'plate-cell' },
-      { html: carCell(v) },
-      { html: `<strong>${esc(v.loan_to || '—')}</strong>` },
-      { html: esc(v.loan_phone || '—') },
-      { html: esc(v.loan_since ? fmtDate(v.loan_since) : '—') },
-      { html: v.loan_due ? `${esc(dayName(v.loan_due))}${dayDiff(v.loan_due) < 0 ? '<br><strong>OVERDUE</strong>' : ''}` : '—' },
-    ] })),
-  });
-}
-
-function printBodyshopList() {
-  const cars = [...S.vehicles.values()].filter(v => tabOf(v) === 'bodyshop')
-    .sort((a, b) => (a.body_due ?? '9999').localeCompare(b.body_due ?? '9999'));
-  if (!cars.length) return toast('No cars at the bodyshop.');
-  printDoc({
-    title: 'Bodyshop', summary: plural(cars.length, 'car') + ' out',
-    how: 'Earliest return first. Overdue cars are marked.',
-    columns: ['Plate', 'Car', 'Work', 'Bodyshop', 'Out since', 'Back by', 'Sold?'],
-    rows: cars.map(v => ({ cells: [
-      { html: plateCell(v), cls: 'plate-cell' },
-      { html: carCell(v) },
-      { html: esc(v.body_notes || '—').replace(/\n/g, '<br>'), cls: 'notes-cell' },
-      { html: esc(v.body_place || '—') },
-      { html: esc(v.body_since ? fmtDate(v.body_since) : '—') },
-      { html: v.body_due ? `${esc(dayName(v.body_due))}${dayDiff(v.body_due) < 0 ? '<br><strong>OVERDUE</strong>' : ''}` : '—' },
-      { html: isSold(v) ? `<strong>SOLD</strong><br>${esc(deliveryLabel(v) || 'No date')}` : 'Stock' },
-    ] })),
-  });
-}
-
 function printCurrentList() {
   if (!isAdmin()) return;
-  ({ sold: printSoldList, dent: printDentList, loan: printLoanList, bodyshop: printBodyshopList })[S.tab]?.();
+  ({ sold: printSoldList, dent: printDentList })[S.tab]?.();
 }
 
 // ---------------------------------------------------------------------
