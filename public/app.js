@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '87';
+const APP_VERSION = '88';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -851,9 +851,8 @@ function cardHTML(v) {
     tab === 'bodyshop' ? detailRow('Bodyshop', v.body_place) : '',
     tab === 'bodyshop' ? detailRow('Since', v.body_since && fmtDate(v.body_since)) : '',
     sold ? detailRow('Salesperson', v.seller) : '',
-    sold ? detailRow('VRT / NCT', v.vrt_nct) : '',
+    v.status !== 'delivered' ? detailRow('VRT / NCT', v.vrt_nct) : '',
     sold ? detailRow('Mechanical', v.mechanical_notes) : '',
-    sold ? detailRow('Estimate', v.estimate) : '',
   ].join('');
 
   const b = (act, label, cls = 'ghost') => `<button class="btn small ${cls}" data-act="${act}">${label}</button>`;
@@ -1717,6 +1716,7 @@ function openVehicleForm({ vehicle = null, sold = false, convert = false } = {})
     </div>
     <label>Colour<input name="color" value="${esc(v.color)}" autocapitalize="words"></label>
     <div class="swatches" id="swatches">${COLOURS.map(([n, h]) => `<button type="button" class="swatch" data-colour="${n}"><span class="dot" style="background:${h}"></span>${n}</button>`).join('')}</div>
+    <label>VRT / NCT<input name="vrt_nct" value="${esc(v.vrt_nct)}" placeholder="e.g. done, VRT pending, 12 Oct"></label>
     <fieldset><legend>Services needed${isNew ? ' — pick at least one' : ''}</legend><div class="pills" id="svcPills">
       <label class="pill all"><input type="checkbox" id="svcAll" ${SERVICES.every(s => services.includes(s.key)) ? 'checked' : ''}><span>All</span></label>
       ${SERVICES.map(svcPill).join('')}
@@ -1737,9 +1737,7 @@ function openVehicleForm({ vehicle = null, sold = false, convert = false } = {})
       ${!v.delivery_date && clean(v.delivery_day) ? `<p class="hint">Previously noted as “${esc(v.delivery_day)}” — pick the date above.</p>` : ''}
       <label>Salesperson<input name="seller" value="${esc(v.seller)}" list="sellerList" autocapitalize="words"></label>
       <datalist id="sellerList">${sellers.map(s => `<option value="${esc(s)}">`).join('')}</datalist>
-      <label>VRT / NCT<input name="vrt_nct" value="${esc(v.vrt_nct)}" placeholder="e.g. done, VRT pending, 12 Oct"></label>
-      <label>Mechanical<textarea name="mechanical_notes" rows="2">${esc(v.mechanical_notes)}</textarea></label>
-      <label>Estimate<input name="estimate" value="${esc(v.estimate)}"></label></div>` : ''}
+      <label>Mechanical<textarea name="mechanical_notes" rows="2">${esc(v.mechanical_notes)}</textarea></label></div>` : ''}
     <label>Notes<textarea name="notes" rows="2">${esc(v.notes)}</textarea></label>
     <p class="form-error" id="formError" hidden></p>
     <div class="sheet-actions">
@@ -1804,6 +1802,7 @@ function openVehicleForm({ vehicle = null, sold = false, convert = false } = {})
       services: SERVICES.filter(s => f[`svc_${s.key}`].checked).map(s => s.key),
       urgent: f.urgent.checked,
       stock_status: form.querySelector('[name=stock_status]:checked')?.value ?? 'in_stock',
+      vrt_nct: clean(f.vrt_nct.value),
     };
     if (!row.reg_ie && !row.reg_imp) return showError('Enter at least one registration (IRL or IMP).');
     // (an existing car keeping its plates isn't checked again)
@@ -1820,9 +1819,7 @@ function openVehicleForm({ vehicle = null, sold = false, convert = false } = {})
       delivery_date: f.delivery_date.value || null,
       delivery_time: clean(f.delivery_time.value),
       seller: clean(f.seller.value),
-      vrt_nct: clean(f.vrt_nct.value),
       mechanical_notes: clean(f.mechanical_notes.value),
-      estimate: clean(f.estimate.value),
     });
     if (isNew) row.status = soldNow ? 'in_prep' : 'stock';
     if (convert) row.status = 'in_prep';
