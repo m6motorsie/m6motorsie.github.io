@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '81';
+const APP_VERSION = '82';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -664,13 +664,15 @@ function refreshButtons(v) {
 
 function refreshStatusHTML(v) {
   if (!inViewing(v)) return '';
+  // Who booked it: the keys go to their desk once the car is refreshed
+  const keys = v.viewing_by ? ` · 🔑 keys to <strong>${esc(nameOf(v.viewing_by))}</strong>` : '';
   if (v.refresh_state === 'doing') {
-    return `<div class="ready-bar doing"><span class="ring half"></span> Refresh · <strong>${esc(nameOf(v.refresh_by))}</strong> since ${esc(fmtDate(v.refresh_started_at))}</div>`;
+    return `<div class="ready-bar doing"><span class="ring half"></span> Refresh · <strong>${esc(nameOf(v.refresh_by))}</strong> since ${esc(fmtDate(v.refresh_started_at))}${keys}</div>`;
   }
   if (v.refresh_state === 'done') {
-    return `<div class="ready-bar done">${ICON.check} Refreshed · ${esc(nameOf(v.refresh_by))} · ${esc(fmtDate(v.refresh_at))}</div>`;
+    return `<div class="ready-bar done">${ICON.check} Refreshed · ${esc(nameOf(v.refresh_by))} · ${esc(fmtDate(v.refresh_at))}${keys}</div>`;
   }
-  return `<div class="ready-bar todo">🧽 Refresh needed before the viewing${clean(v.viewing_note) ? ` · ${esc(v.viewing_note)}` : ''}</div>`;
+  return `<div class="ready-bar todo">🧽 Refresh needed before the viewing${clean(v.viewing_note) ? ` · ${esc(v.viewing_note)}` : ''}${keys}</div>`;
 }
 
 async function cycleRefresh(v, btn, next = v.refresh_state === 'doing' ? 'done' : 'doing') {
@@ -785,13 +787,14 @@ function printViewingList() {
       { html: plateCell(v), cls: 'plate-cell' },
       { html: carCell(v) },
       { html: esc(v.viewing_note || ''), cls: 'notes-cell' },
+      { html: `<strong>${esc(v.viewing_by ? nameOf(v.viewing_by) : '—')}</strong>` },
       { html: v.refresh_state === 'done' ? `<strong>✓ Refreshed</strong><br><small>${esc(nameOf(v.refresh_by))}</small>` : '<span class="tick">☐</span>' },
     ] });
   }
   printDoc({
     title: 'Viewings', summary: plural(cars.length, 'car'),
     how: 'Refresh each car before its viewing. Tick ☐ when done — and tap Refreshed in the app.',
-    columns: ['Time', 'Plate', 'Car', 'Note', 'Refreshed'], rows,
+    columns: ['Time', 'Plate', 'Car', 'Note', 'Keys to', 'Refreshed'], rows,
   });
 }
 
@@ -839,7 +842,7 @@ function cardHTML(v) {
   }
   if (inViewing(v)) {
     const today = dayDiff(inputDate(new Date(v.viewing_at))) <= 0;
-    chips.push(`<span class="chip viewing${today ? ' soon' : ''}">👀 VIEWING · ${esc(viewingLabel(v))}</span>`);
+    chips.push(`<span class="chip viewing${today ? ' soon' : ''}">👀 VIEWING · ${esc(viewingLabel(v))}${v.viewing_by ? ` · ${esc(nameOf(v.viewing_by))}` : ''}</span>`);
   }
   if (inDent(v)) chips.push(`<span class="chip hold">DENT${v.dent_date ? ` · ${esc(dayName(v.dent_date))}` : ''}</span>`);
   if (sold && tab !== 'sold') chips.push('<span class="chip sold">SOLD</span>');
