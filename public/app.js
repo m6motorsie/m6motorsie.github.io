@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '84';
+const APP_VERSION = '85';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -462,7 +462,7 @@ function renderTabs() {
   badge.title = `${today} to deliver today`;
   $('#purgeBtn').hidden = S.tab !== 'delivered';
   const print = $('#printBtn');
-  print.hidden = !isAdmin() || !['sold', 'viewing', 'dent', 'loan', 'bodyshop'].includes(S.tab);
+  print.hidden = !isAdmin() || !['sold', 'dent', 'loan', 'bodyshop'].includes(S.tab);
   print.textContent = `🖨 Print ${TAB_TITLE[S.tab]?.toLowerCase()} list`;
   const fab = $('#fab');
   // Adding stock and recording sales are admin-only (also enforced in the database)
@@ -773,31 +773,6 @@ function viewingHTML(list) {
     <h3>${esc(g.title)} <span class="count">${g.items.length}</span></h3>
     ${g.items.map(cardHTML).join('')}
   </section>`).join('');
-}
-
-function printViewingList() {
-  const cars = [...S.vehicles.values()].filter(inViewing)
-    .sort((a, b) => new Date(a.viewing_at) - new Date(b.viewing_at));
-  if (!cars.length) return toast('No viewings booked.');
-  const rows = [];
-  let current = null;
-  for (const v of cars) {
-    const g = viewingGroup(v);
-    if (g.key !== current) { current = g.key; rows.push({ group: g.title }); }
-    rows.push({ cells: [
-      { html: esc(new Date(v.viewing_at).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })) },
-      { html: plateCell(v), cls: 'plate-cell' },
-      { html: carCell(v) },
-      { html: esc(v.viewing_note || ''), cls: 'notes-cell' },
-      { html: `<strong>${esc(v.viewing_by ? nameOf(v.viewing_by) : '—')}</strong>` },
-      { html: v.refresh_state === 'done' ? `<strong>✓ Refreshed</strong><br><small>${esc(nameOf(v.refresh_by))}</small>` : '<span class="tick">☐</span>' },
-    ] });
-  }
-  printDoc({
-    title: 'Viewings', summary: plural(cars.length, 'car'),
-    how: 'Refresh each car before its viewing. Tick ☐ when done — and tap Refreshed in the app.',
-    columns: ['Time', 'Plate', 'Car', 'Note', 'Keys to', 'Refreshed'], rows,
-  });
 }
 
 // next: 'doing' / 'done', or 'pending' to undo (Cancel / ↺ Undo)
@@ -1201,7 +1176,7 @@ function printBodyshopList() {
 
 function printCurrentList() {
   if (!isAdmin()) return;
-  ({ sold: printSoldList, viewing: printViewingList, dent: printDentList, loan: printLoanList, bodyshop: printBodyshopList })[S.tab]?.();
+  ({ sold: printSoldList, dent: printDentList, loan: printLoanList, bodyshop: printBodyshopList })[S.tab]?.();
 }
 
 // ---------------------------------------------------------------------
