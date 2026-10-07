@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '86';
+const APP_VERSION = '87';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -460,6 +460,12 @@ function renderTabs() {
   badge.hidden = !today;
   badge.textContent = today;
   badge.title = `${today} to deliver today`;
+  // Red badge on Stock: sold cars still waiting there (arrived already sold)
+  const soldInStock = [...S.vehicles.values()].filter(v => isSold(v) && tabOf(v) === 'stock').length;
+  const stockBadge = $('[data-tab=stock] .today');
+  stockBadge.hidden = !soldInStock;
+  stockBadge.textContent = soldInStock;
+  stockBadge.title = `${soldInStock} sold ${soldInStock === 1 ? 'car' : 'cars'} waiting in Stock`;
   $('#purgeBtn').hidden = S.tab !== 'delivered';
   const print = $('#printBtn');
   print.hidden = !isAdmin() || !['sold', 'dent'].includes(S.tab);

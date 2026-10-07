@@ -296,7 +296,7 @@ main .tabs, main .toolbar { max-width: 900px; margin-left: auto; margin-right: a
 .chip.ready { font-weight: 700; }
 /* Red "due today" number on the Sold tab */
 .tabs .count.today { background: var(--urgent); color: #fff; margin-left: 3px; font-weight: 700; }
-@media (max-width: 640px) { .tabs .count.today { display: inline-block; margin: 3px 0 0 2px; } .tabs button[data-tab=sold] .count:not(.today) { display: inline-block; } }
+@media (max-width: 640px) { .tabs .count.today { display: inline-block; margin: 3px 0 0 2px; } .tabs button[data-tab=sold] .count:not(.today), .tabs button[data-tab=stock] .count:not(.today) { display: inline-block; } }
 .card.flash { animation: flash 1.8s ease-out; }
 @keyframes flash { 0%, 45% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: var(--shadow); } }
 /* Team screen: one clean row per person; tap to edit */
