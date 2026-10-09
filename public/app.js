@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '90';
+const APP_VERSION = '91';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -438,12 +438,17 @@ const untouched = v => SERVICES.every(s => (v[`${s.key}_state`] ?? 'pending') ==
 const workStage = v => (untouched(v) ? 0 : v.services.length && v.done_at ? 2 : 1);
 // The car is waiting for one of MY jobs (asked for on it and still to do)
 const needsMe = v => myServiceKeys().some(k => v.services.includes(k) && v[`${k}_state`] === 'pending');
-const onTab = (v, tab) => (tab === 'dent' ? inDent(v) : tab === 'viewing' ? inViewing(v) : tabOf(v) === tab);
+// In prep: you see the cars YOU are working on; managers and the sold-cars person see all
+const seesAllInPrep = () => isAdmin() || canReady();
+const workingOnIt = v => SERVICES.some(s => v[`${s.key}_state`] === 'doing' && v[`${s.key}_by`] === S.me?.id);
+const onTab = (v, tab) => (tab === 'dent' ? inDent(v) : tab === 'viewing' ? inViewing(v)
+  : tab === 'in_prep' ? tabOf(v) === 'in_prep' && (seesAllInPrep() || workingOnIt(v)) : tabOf(v) === tab);
 
 function renderTabs() {
   const counts = Object.fromEntries(Object.keys(TAB_TITLE).map(t => [t, 0]));
   for (const v of S.vehicles.values()) {
-    counts[tabOf(v)]++;
+    const tab = tabOf(v);
+    if (tab !== 'in_prep' || onTab(v, 'in_prep')) counts[tab]++;
     if (inDent(v)) counts.dent++;
     if (inViewing(v)) counts.viewing++;
   }
@@ -604,11 +609,11 @@ function serviceHTML(v, key) {
     </button>`;
   }
   const by = v[`${key}_by`];
-  const who = state === 'doing' ? nameOf(by) : state === 'done' ? `${nameOf(by)} · ${fmtDate(v[`${key}_done_at`], false)}` : '';
+  const who = state === 'doing' ? nameOf(by) : state === 'done' ? `${nameOf(by)} · ${fmtDate(v[`${key}_done_at`], false)}` : 'Tap to start';
   const owner = jobOwner(v, key);
   const hint = owner ? `${nameOf(owner)}’s job — only they or a manager can change it`
     : { pending: 'Tap to start', doing: 'Tap when finished', done: 'Done — tap twice to undo' }[state];
-  const mark = { pending: '<span class="ring"></span>', doing: '<span class="ring half"></span>', done: ICON.check }[state];
+  const mark = { pending: '<span class="play">▶</span>', doing: '<span class="ring half"></span>', done: ICON.check }[state];
   return `<button type="button" class="svc ${state}${owner ? ' locked' : ''}" data-act="svc" data-key="${key}" title="${esc(`${s.label} — ${hint}`)}">
     ${mark}<span class="svc-text"><strong>${esc(s.label)}</strong>${who ? `<small>${esc(who)}</small>` : ''}</span>${owner ? `<span class="svc-lock">${ICON.lock}</span>` : ''}
   </button>`;
@@ -625,6 +630,8 @@ function detailRow(label, value, html = null) {
 // ---------------------------------------------------------------------
 const canReady = () => !!S.me?.handles_sold;
 const canDent = () => !!S.me?.can_dent;
+// Signing a dent off (Done / Take off list) — Bart (031_*.sql); before that runs, Dent people
+const canFinishDent = () => (S.me && 'can_finish_dent' in S.me ? !!S.me.can_finish_dent : canDent());
 const canBodyshop = () => !!S.me?.can_bodyshop;
 const dueToday = v => isSold(v) && !!v.delivery_date && dayDiff(v.delivery_date) <= 0;
 
@@ -975,9 +982,9 @@ function dentHTML(list) {
       <span class="dent-where">${esc(whereLabel(v))}</span>
     </div>
     <div class="dent-fix">${esc(v.dent_notes || '—')}</div>
-    ${canDent() ? `<div class="dent-actions">
-      <button class="btn small ghost" data-act="dent">Edit</button>
-      <button class="btn small accent" data-act="dentdone">${ICON.check} Done</button>
+    ${canDent() || canFinishDent() ? `<div class="dent-actions">
+      ${canDent() ? '<button class="btn small ghost" data-act="dent">Edit</button>' : ''}
+      ${canFinishDent() ? `<button class="btn small accent" data-act="dentdone">${ICON.check} Done</button>` : ''}
     </div>` : ''}
   </div>`;
   return [...groups.values()].map(g => `<section class="deliv-group dent-group ${g.cls}">
@@ -988,7 +995,7 @@ function dentHTML(list) {
 
 const EMPTY = {
   stock: 'No vehicles in stock.',
-  in_prep: 'Nobody is working on a car right now. Tap a service on a car to start it.',
+  in_prep: 'No car in prep for you right now. Tap ▶ on a job to start it.',
   sold: 'No sold cars waiting for delivery.',
   viewing: 'No viewings booked. The sales team taps “👀 Viewing” on a car to book one.',
   dent: 'The dent list is empty. Tap “Dent” on a car to add it.',
@@ -1170,7 +1177,7 @@ async function onListClick(e) {
   if (act === 'dent') return canDent() && openHoldForm(v, act);
   if (act === 'bodyshop') return canBodyshop() && openBodyshopForm(v);
   if (act === 'release') return (v.hold === 'bodyshop' ? canBodyshop() : isAdmin()) && releaseHold(v);
-  if (act === 'dentdone') return canDent() && dentDone(v);
+  if (act === 'dentdone') return canFinishDent() && dentDone(v);
 
   if (act === 'viewing') return canTestdrive() && openViewingForm(v);
   if (act === 'testdrive' || act === 'testback') return canTestdrive() && setTestdrive(v, act === 'testdrive');
@@ -1231,6 +1238,11 @@ async function cycleService(v, key, btn) {
   const patch = { [`${key}_state`]: next };
   // Tapping a service the car wasn't asked for adds it to the car and starts it
   if (!v.services.includes(key)) patch.services = SERVICES.map(s => s.key).filter(k => v.services.includes(k) || k === key);
+  // A finished Full Valet includes the First Clean: mark it done too, unless
+  // someone else is in the middle of it
+  const firstToo = key === 'full' && next === 'done' && v.services.includes('first') && v.first_state !== 'done'
+    && !(v.first_state === 'doing' && v.first_by && v.first_by !== S.me.id);
+  if (firstToo) patch.first_state = 'done';
 
   // Optimistic update; the server fills in the real who/when.
   const before = { ...v };
@@ -1239,6 +1251,7 @@ async function cycleService(v, key, btn) {
     ...patch,
     [`${key}_by`]: next === 'pending' ? null : (v[`${key}_by`] ?? S.me.id),
     [`${key}_done_at`]: next === 'done' ? new Date().toISOString() : null,
+    ...(firstToo ? { first_by: v.first_by ?? S.me.id, first_done_at: new Date().toISOString() } : {}),
   });
   renderAll();
   try {
@@ -1286,7 +1299,7 @@ function openHoldForm(v, kind) {
     : `<label>Where is the dent?<textarea name="dent_notes" rows="3" placeholder="e.g. rear left door, small dent on bonnet">${esc(v.dent_notes)}</textarea></label>`}
     <p class="form-error" id="holdError" hidden></p>
     <div class="sheet-actions">
-      ${!loan && editing ? `<button type="button" class="btn ghost danger" id="dentRemove">Take off list</button><span class="spacer"></span>` : ''}
+      ${!loan && editing && canFinishDent() ? `<button type="button" class="btn ghost danger" id="dentRemove">Take off list</button><span class="spacer"></span>` : ''}
       <button type="button" class="btn ghost" data-close>Cancel</button>
       <button type="submit" class="btn primary">${editing ? 'Save' : loan ? 'Loan car' : 'Add to Dent list'}</button>
     </div>
@@ -1976,6 +1989,7 @@ function personTags(p) {
   if (p.handles_sold) tags.push('<span class="tag sold">Prepares sold cars</span>');
   if (p.sold_alerts) tags.push('<span class="tag alerts">🔔 Sold notifications</span>');
   if (p.can_dent) tags.push('<span class="tag dent">Dent</span>');
+  if (p.can_finish_dent) tags.push('<span class="tag dent">✅ Dent done</span>');
   if (p.can_bodyshop) tags.push('<span class="tag body">Bodyshop</span>');
   if (p.can_testdrive) tags.push('<span class="tag sold">🚗 Sales</span>');
   if (p.does_refresh) tags.push('<span class="tag alerts">🧽 Refresh</span>');
@@ -2037,7 +2051,8 @@ function openPerson(id) {
     ${sw('data-flag="loan_alerts"', p.loan_alerts, '🔔 Back from loan notifications', 'A notification when a car comes back from loan, to get it ready again.')}` : ''}
 
     <div class="section-label">Dent</div>
-    ${sw('data-flag="can_dent"', p.can_dent, 'Can use Dent', 'Add cars to the Dent list and mark them done.')}
+    ${sw('data-flag="can_dent"', p.can_dent, 'Can use Dent', 'Add cars to the Dent list and edit what’s written.')}
+    ${'can_finish_dent' in p ? sw('data-flag="can_finish_dent"', p.can_finish_dent, '✅ Dent done', 'Signs dents off: the Done button that takes a car off the Dent list.') : ''}
 
     <div class="section-label">Bodyshop</div>
     ${sw('data-flag="can_bodyshop"', p.can_bodyshop, 'Can use Bodyshop', 'Send cars for panel beating & paint and mark them back.')}
@@ -2622,7 +2637,7 @@ const HELP = [
       <li><b>◐ Amber</b> — someone is working on it (shows their name).</li>
       <li><b>✓ Green</b> — done (shows who and when).</li>
       <li><b>+ Faded</b> — not asked for on this car. Tap it to add it and start.</li></ul>
-    <p><b>Tap once when you start</b>, <b>tap again when you finish</b>. The job goes in <b>your name</b> — that’s what counts for pay (Full Valet) and for your monthly counter, so always use your own login.</p>
+    <p><b>Tap ▶ when you start</b>, <b>tap again when you finish</b>. Finishing a Full Valet marks the First Clean done too. The <b>In prep</b> tab shows the cars you are working on. The job goes in <b>your name</b> — that’s what counts for pay (Full Valet) and for your monthly counter, so always use your own login.</p>
     <p>Tapped by mistake on a green one? Tap it twice to undo.</p>
     <p>🔒 A job someone else started or finished is theirs: only they (or a manager) can change it.</p>` },
   { id: 'tabs', title: 'What the tabs mean', tabs: ['stock', 'in_prep', 'sold', 'delivered'], body: `
@@ -2655,7 +2670,7 @@ const HELP = [
     <p>The card shows the latest entry; tap it to see everything done on that car. Fixed issues are logged automatically.</p>` },
   { id: 'dent', title: 'Dent list', tabs: ['dent'], body: `
     <p>Tap <b>Dent</b> on a car and write where the dent is. The car stays where it is — it’s just added to the list.</p>
-    <p>On the day, the manager prints the list from the <b>Dent</b> tab. When a car is fixed, tap <b>Done</b>.</p>` },
+    <p>The manager can print the list from the <b>Dent</b> tab. When a car is fixed, the person who signs dents off taps <b>Done</b>.</p>` },
   { id: 'bodyshop', title: 'Bodyshop', tabs: ['bodyshop'], body: `
     <p>When a car goes out for panel beating & paint, tap <b>Bodyshop</b> on it, write what’s being done, which bodyshop and when it’s due back. It moves to the <b>Bodyshop</b> tab (red when overdue).</p>
     <p>When it comes back, tap <b>Back from bodyshop</b> — it returns to Stock or Deliveries.</p>` },

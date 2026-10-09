@@ -273,6 +273,11 @@ main .tabs, main .toolbar { max-width: 900px; margin-left: auto; margin-right: a
 .svc.doing { background: var(--doing-bg); color: var(--doing-fg); border-color: var(--doing-bd); }
 .svc.done  { background: var(--done-bg);  color: var(--done-fg);  border-color: var(--done-bd); }
 .svc.armed { outline: 2px solid var(--urgent); outline-offset: 1px; }
+/* A job still to do: a clear button to press */
+.svc.pending { background: var(--accent); border-color: var(--accent); color: var(--accent-text); box-shadow: 0 2px 8px rgba(216,35,42,.35); }
+.svc.pending small { opacity: .95; font-weight: 600; }
+.svc .play { flex: none; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(255,255,255,.25); font-size: 9px; padding-left: 1px; }
 .other-jobs { font-size: 12px; color: var(--muted); margin-top: -4px; }
 /* Someone else working on this car right now */
 .other-doing {
