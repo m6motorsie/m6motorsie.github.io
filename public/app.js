@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '93';
+const APP_VERSION = '94';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -595,6 +595,13 @@ function issuesHTML(v) {
     `<span class="issue"><span class="issue-icon">${ISSUE_KINDS[i.kind]?.icon ?? '⚠️'}</span>${esc(issueText(i))}</span>`).join('')}</button>`;
 }
 
+// My jobs this car doesn't need (staff can't add them): a quiet line instead of a button
+function notNeededHTML(v) {
+  if (isAdmin() || v.status === 'delivered') return '';
+  const skip = myServiceKeys().filter(k => SERVICE[k] && isExtra(v, k)).map(k => SERVICE[k].label);
+  return skip.length ? `<div class="other-jobs">Not needed on this car: ${esc(skip.join(', '))}</div>` : '';
+}
+
 // A job someone else started or finished is theirs: only they or an admin can
 // finish, undo or change it (also enforced in the database, 020_*.sql).
 function jobOwner(v, key) {
@@ -918,8 +925,10 @@ function cardHTML(v) {
     ${myServiceKeys().length ? `<div class="services">${SERVICES
       // Only the viewer's own jobs (see myServiceKeys); extras faded — delivered cars show what was done
       .filter(s => myServiceKeys().includes(s.key))
-      .filter(s => v.status !== 'delivered' || !isExtra(v, s.key))
+      // Jobs the car wasn't asked for: only managers can add them (032_*.sql)
+      .filter(s => !isExtra(v, s.key) || (isAdmin() && v.status !== 'delivered'))
       .map(s => serviceHTML(v, s.key)).join('')}</div>
+    ${notNeededHTML(v)}
     ${otherJobsHTML(v)}` : jobStatusHTML(v)}
     ${sold ? readyStatusHTML(v) : ''}
     ${refreshStatusHTML(v)}
@@ -1233,6 +1242,7 @@ function followCard(id, tab) {
 
 async function cycleService(v, key, btn) {
   if (!S.me) return;
+  if (isExtra(v, key) && !isAdmin()) return toast(`${SERVICE[key].label} isn’t needed on this car — ask a manager if it should be.`);
   const owner = jobOwner(v, key);
   if (owner) return toast(`${SERVICE[key].label} is ${nameOf(owner)}’s job — only ${nameOf(owner)} or a manager can change it.`);
   const state = v[`${key}_state`];
@@ -2639,7 +2649,7 @@ const HELP = [
     <ul><li><b>○ Grey</b> — still to do.</li>
       <li><b>◐ Amber</b> — someone is working on it (shows their name).</li>
       <li><b>✓ Green</b> — done (shows who and when).</li>
-      <li><b>+ Faded</b> — not asked for on this car. Tap it to add it and start.</li></ul>
+      <li><b>Not needed on this car</b> — that job wasn’t asked for. Only a manager can add it (Edit).</li></ul>
     <p><b>Tap ▶ when you start</b>, <b>tap again when you finish</b>. Finishing a Full Valet marks the First Clean done too. The <b>In prep</b> tab shows the cars you are working on. The job goes in <b>your name</b> — that’s what counts for pay (Full Valet) and for your monthly counter, so always use your own login.</p>
     <p>Tapped by mistake on a green one? Tap it twice to undo.</p>
     <p>🔒 A job someone else started or finished is theirs: only they (or a manager) can change it.</p>` },
