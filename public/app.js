@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '94';
+const APP_VERSION = '95';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -196,6 +196,7 @@ const S = {
   issuesReady: false,
   workLog: new Map(),       // vehicle id → work done, newest first (025_*.sql)
   workLogReady: false,
+  online: new Set(),        // ids of people with the app open right now (presence)
 };
 
 const configured = !SUPABASE_URL.includes('YOUR-') && !SUPABASE_ANON_KEY.includes('YOUR-');
@@ -325,7 +326,37 @@ function subscribe() {
       refreshWorkSheet();
     })
     .subscribe();
+  joinPresence();
 }
+
+// Who has the app open right now: each app joins one shared presence channel
+// under its own user id. Only the Team screen (system admin) shows it.
+function joinPresence() {
+  if (!S.me) return;
+  const ch = sb.channel('m6-online', { config: { presence: { key: S.me.id } } });
+  ch.on('presence', { event: 'sync' }, () => {
+    S.online = new Set(Object.keys(ch.presenceState?.() ?? {}));
+    if (S.view === 'team') renderTeam();
+  }).subscribe(async status => {
+    if (status === 'SUBSCRIBED') await ch.track({ at: new Date().toISOString() });
+  });
+}
+
+// "Last seen": stamp my own time when the app opens and every few minutes on screen
+async function touchLastSeen() {
+  if (!S.me || document.hidden) return;
+  try { await sb.rpc('touch_last_seen'); } catch {}
+}
+
+const ago = ts => {
+  const min = Math.round((Date.now() - new Date(ts)) / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h} h ago`;
+  const d = Math.round(h / 24);
+  return d === 1 ? 'yesterday' : d < 7 ? `${d} days ago` : fmtDate(ts, false);
+};
 
 async function uploadPhoto(file) {
   const blob = await compressImage(file);
@@ -2014,16 +2045,24 @@ function personTags(p) {
 
 function renderTeam() {
   const staff = [...S.profiles.values()].sort((a, b) => a.display_name.localeCompare(b.display_name));
+  const seen = p => S.online.has(p.id) ? '<span class="seen on">● Online now</span>'
+    : p.last_seen_at ? `<span class="seen">Last seen ${esc(ago(p.last_seen_at))}</span>`
+    : 'last_seen_at' in p ? '<span class="seen">Not seen yet</span>' : '';
   const row = p => `<button type="button" class="person-row" data-person="${p.id}">
-    <span class="person-avatar">${esc(initials(p.display_name))}</span>
-    <span class="person-main"><strong>${esc(p.display_name)}</strong><span class="person-tags">${personTags(p)}</span></span>
+    <span class="person-avatar${S.online.has(p.id) ? ' online' : ''}">${esc(initials(p.display_name))}</span>
+    <span class="person-main"><strong>${esc(p.display_name)}</strong>${seen(p)}<span class="person-tags">${personTags(p)}</span></span>
     <span class="person-chevron" aria-hidden="true">›</span>
   </button>`;
   const group = (title, people) => people.length ? `<div class="panel team-group">
     <h2>${title} <span class="badge grey">${people.length}</span></h2>
     ${people.map(row).join('')}
   </div>` : '';
+  const onNow = staff.filter(p => S.online.has(p.id));
   $('#teamView').innerHTML = `
+    <div class="panel online-now">
+      <h2>🟢 ${onNow.length} online now</h2>
+      <p class="muted">${onNow.length ? esc(onNow.map(p => p.display_name).join(', ')) : 'Nobody has the app open right now.'}</p>
+    </div>
     ${group('Managers', staff.filter(p => p.is_admin))}
     ${group('Team', staff.filter(p => !p.is_admin))}
     <p class="muted team-hint">Tap a person to change their jobs and settings. New people appear here once their login is created.</p>`;
@@ -2837,6 +2876,7 @@ async function onSessionChange() {
   renderAll();
   subscribe();
   syncPush();
+  touchLastSeen();
 }
 
 function wireUi() {
@@ -3029,8 +3069,12 @@ function wireAutoUpdate() {
     const away = hiddenAt ? Date.now() - hiddenAt : 0;
     hiddenAt = null;
     checkForUpdate();
+    touchLastSeen();
     if (away > 20 * 1000) refreshData();  // back after a while: fresh data + live updates
   });
+  // Last seen every 5 min while on screen; the Team screen's "x min ago" every minute
+  setInterval(touchLastSeen, 5 * 60 * 1000);
+  setInterval(() => { if (S.view === 'team' && !document.hidden) renderTeam(); }, 60 * 1000);
   window.addEventListener('online', refreshData);
   setInterval(() => { if (!document.hidden) checkForUpdate(); }, VERSION_CHECK_MS);
 }

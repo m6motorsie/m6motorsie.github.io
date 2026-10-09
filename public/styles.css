@@ -671,3 +671,9 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 .chip.testdrive { background: #6d28d9; border-color: #6d28d9; color: #fff; font-weight: 700; }
 .arrival-notes { display: grid; gap: 10px; }
 .arrival-notes:empty { display: none; }
+
+/* Team screen: who's online / last seen */
+.online-now h2 { font-size: 15px; }
+.seen { font-size: 12px; color: var(--muted); }
+.seen.on { color: var(--done-fg); font-weight: 600; }
+.person-avatar.online { box-shadow: 0 0 0 2px var(--done-bd); }
