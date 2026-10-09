@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '89';
+const APP_VERSION = '90';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -421,12 +421,14 @@ function tabOf(v) {
 
 // A car added already sold ("Already sold" / "Car not in stock") stays at the top
 // of Stock (SOLD chip) with the cars to wash until all its jobs are done — In prep
-// while someone works on it — and only then moves to Sold. Cars imported before
-// this existed are left alone.
+// while someone works on it — and then moves to Deliveries. It also moves as soon
+// as the delivery prep starts (Start prep / Ready to go), even if a job bubble was
+// never ticked. Cars imported before this existed are left alone.
 const SOLD_ON_ARRIVAL_SINCE = Date.parse('2026-09-30T00:00:00Z');
 function soldOnArrival(v) {
   const made = Date.parse(v.created_at ?? ''), sold = Date.parse(v.sold_at ?? '');
-  return made >= SOLD_ON_ARRIVAL_SINCE && Math.abs(sold - made) < 5000 && !v.done_at;
+  return made >= SOLD_ON_ARRIVAL_SINCE && Math.abs(sold - made) < 5000 && !v.done_at
+    && (v.ready_state ?? 'pending') === 'pending';
 }
 
 const isSold = v => v.status === 'in_prep';
@@ -2626,7 +2628,7 @@ const HELP = [
   { id: 'tabs', title: 'What the tabs mean', tabs: ['stock', 'in_prep', 'sold', 'delivered'], body: `
     <ul><li><b>Deliveries</b> — sold cars waiting for delivery, by delivery day.</li>
       <li><b>Viewings</b> — cars booked for a viewing, by day and time, with their refresh.</li>
-      <li><b>Stock</b> — cars not sold, nobody working on them. Urgent cars, then cars waiting for <b>your</b> job, then cars with nothing done yet are on top. A car that arrived <b>already sold</b> stays here (SOLD) until all its jobs are done, then moves to Deliveries.</li>
+      <li><b>Stock</b> — cars not sold, nobody working on them. Urgent cars, then cars waiting for <b>your</b> job, then cars with nothing done yet are on top. A car that arrived <b>already sold</b> stays here (SOLD) until all its jobs are done (or its delivery prep starts), then moves to Deliveries.</li>
       <li><b>In prep</b> — someone is working on it right now. When the job is done it goes back to Stock (or to Deliveries).</li>
       <li><b>Bodyshop</b> — out for panel beating & paint.</li>
       <li><b>Dent</b> — the written dent list.</li>
