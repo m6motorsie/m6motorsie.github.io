@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '95';
+const APP_VERSION = '96';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -336,10 +336,21 @@ function joinPresence() {
   const ch = sb.channel('m6-online', { config: { presence: { key: S.me.id } } });
   ch.on('presence', { event: 'sync' }, () => {
     S.online = new Set(Object.keys(ch.presenceState?.() ?? {}));
+    renderOnline();
     if (S.view === 'team') renderTeam();
   }).subscribe(async status => {
     if (status === 'SUBSCRIBED') await ch.track({ at: new Date().toISOString() });
   });
+}
+
+// Header pill for the system admin: "🟢 4 online" (tap → Team screen)
+function renderOnline() {
+  const pill = $('#onlineBtn');
+  pill.hidden = !canManageTeam();
+  if (pill.hidden) return;
+  const names = [...S.online].map(nameOf).sort();
+  pill.innerHTML = `<span class="dot-on"></span>${S.online.size} online`;
+  pill.title = names.length ? `Online now: ${names.join(', ')}` : 'Nobody online right now';
 }
 
 // "Last seen": stamp my own time when the app opens and every few minutes on screen
@@ -404,6 +415,7 @@ function setView(view) {
 function renderAll() {
   document.body.classList.toggle('is-admin', isAdmin());
   $('#teamBtn').hidden = !canManageTeam();
+  renderOnline();
   if (S.view === 'team' && !canManageTeam()) setView('main');
   $('#meBtn').textContent = initials(S.me?.display_name);
   const needed = (S.supplies ?? []).filter(s => s.status === 'needed').length;
@@ -2959,6 +2971,7 @@ function wireUi() {
   $('#list').addEventListener('click', onListClick);
 
   $('#teamBtn').addEventListener('click', () => canManageTeam() && setView('team'));
+  $('#onlineBtn').addEventListener('click', () => canManageTeam() && setView('team'));
   $('#reportBtn').addEventListener('click', () => setView('report'));
   $('#trainingBtn').innerHTML = ICON.video;
   $('#trainingBtn').addEventListener('click', openTraining);

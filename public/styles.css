@@ -122,10 +122,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand); out
   padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top));
   background: var(--brand); color: var(--brand-text);
 }
-.brand { flex: 1; min-width: 0; display: grid; line-height: 1.15; }
+.brand { flex: 0 1 auto; min-width: 0; display: grid; line-height: 1.15; }
 .brand strong { font-size: 16px; }
 .brand span { font-size: 12px; opacity: .7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.clock { flex: none; display: grid; justify-items: end; line-height: 1.15; margin-right: 6px; font-variant-numeric: tabular-nums; }
+.clock { flex: none; display: grid; justify-items: end; line-height: 1.15; margin-left: auto; margin-right: 6px; font-variant-numeric: tabular-nums; }
 .clock strong { font-size: 17px; }
 .clock span { font-size: 12px; opacity: .7; white-space: nowrap; }
 @media (max-width: 420px) {
@@ -677,3 +677,11 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 .seen { font-size: 12px; color: var(--muted); }
 .seen.on { color: var(--done-fg); font-weight: 600; }
 .person-avatar.online { box-shadow: 0 0 0 2px var(--done-bd); }
+/* Header: who's online (system admin) */
+.online-pill {
+  flex: none; margin-left: 14px; display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 11px; border-radius: 999px; border: 1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.08); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.online-pill .dot-on { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,.25); }
+@media (max-width: 420px) { .online-pill { padding: 4px 8px; font-size: 12px; } }
