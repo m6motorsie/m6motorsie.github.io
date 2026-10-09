@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '92';
+const APP_VERSION = '93';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -404,8 +404,8 @@ const canSeeViewings = () => !!(S.me?.does_refresh || S.me?.can_testdrive);
 // Test drives: the sales team (profiles.can_testdrive) marks a car out / back
 const canTestdrive = () => !!S.me?.can_testdrive;
 const onTestdrive = v => !!v.testdrive_since && v.status !== 'delivered';
-// The sales team doesn't work on the cars: no + Issue / 🔧 Log buttons or log line
-// for them (they still see open issues on the card)
+// The sales team doesn't work on the cars: no + Issue / 🔧 Log buttons for them.
+// They still see open issues and the latest log line (tap → history, read-only).
 const worksOnCars = () => !canTestdrive() || myServiceKeys().length > 0;
 // "Today 15:00", "Tomorrow 10:30", "Fri 9 Oct 11:00"
 function viewingLabel(v) {
@@ -914,7 +914,7 @@ function cardHTML(v) {
     ${details ? `<dl class="details">${details}</dl>` : ''}
     ${clean(v.notes) ? `<div class="notes">${esc(v.notes)}</div>` : ''}
     ${issuesHTML(v)}
-    ${worksOnCars() ? workLogHTML(v) : ''}
+    ${workLogHTML(v)}
     ${myServiceKeys().length ? `<div class="services">${SERVICES
       // Only the viewer's own jobs (see myServiceKeys); extras faded — delivered cars show what was done
       .filter(s => myServiceKeys().includes(s.key))
@@ -1344,7 +1344,7 @@ function openWorkSheet(v) {
   const sheet = openSheet(`<div class="form">
     ${sheetHead('Work log')}
     <div class="hold-car">${plateHTML(v)}<span class="muted">${esc(car)}</span></div>
-    ${v.status !== 'delivered' ? `<form id="workForm" class="form" novalidate>
+    ${v.status !== 'delivered' && worksOnCars() ? `<form id="workForm" class="form" novalidate>
       <label>What did you do?<input name="work_note" autocomplete="off" placeholder="e.g. Grille wrapped, back diffuser sprayed"></label>
       <p class="hint" style="margin:0">Your name and today’s date are added by themselves.</p>
       <p class="form-error" id="workError" hidden></p>
