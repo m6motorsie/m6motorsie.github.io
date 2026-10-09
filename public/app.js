@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '91';
+const APP_VERSION = '92';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -404,6 +404,9 @@ const canSeeViewings = () => !!(S.me?.does_refresh || S.me?.can_testdrive);
 // Test drives: the sales team (profiles.can_testdrive) marks a car out / back
 const canTestdrive = () => !!S.me?.can_testdrive;
 const onTestdrive = v => !!v.testdrive_since && v.status !== 'delivered';
+// The sales team doesn't work on the cars: no + Issue / 🔧 Log buttons or log line
+// for them (they still see open issues on the card)
+const worksOnCars = () => !canTestdrive() || myServiceKeys().length > 0;
 // "Today 15:00", "Tomorrow 10:30", "Fri 9 Oct 11:00"
 function viewingLabel(v) {
   const d = new Date(v.viewing_at);
@@ -892,8 +895,8 @@ function cardHTML(v) {
     actions = (onTestdrive(v) ? b('testback', `${ICON.check} Back from test drive`, 'accent') : b('testdrive', '🚗 Test drive')) + actions;
   }
   // Anyone on staff can note a problem (wheels, missing part…)
-  if (S.workLogReady && v.status !== 'delivered') actions = b('worklog', '🔧 Log') + actions;
-  if (S.issuesReady && v.status !== 'delivered') actions = b('issues', openIssues(v).length ? `⚠ Issues (${openIssues(v).length})` : '+ Issue') + actions;
+  if (S.workLogReady && worksOnCars() && v.status !== 'delivered') actions = b('worklog', '🔧 Log') + actions;
+  if (S.issuesReady && worksOnCars() && v.status !== 'delivered') actions = b('issues', openIssues(v).length ? `⚠ Issues (${openIssues(v).length})` : '+ Issue') + actions;
 
   // Red outline: urgent, going out today (or overdue), or a loan / bodyshop car that's late back
   const flagged = (v.status !== 'delivered' && v.urgent) || (sold && dueToday(v)) || (tab === 'loan' && v.loan_due && dayDiff(v.loan_due) < 0)
@@ -911,7 +914,7 @@ function cardHTML(v) {
     ${details ? `<dl class="details">${details}</dl>` : ''}
     ${clean(v.notes) ? `<div class="notes">${esc(v.notes)}</div>` : ''}
     ${issuesHTML(v)}
-    ${workLogHTML(v)}
+    ${worksOnCars() ? workLogHTML(v) : ''}
     ${myServiceKeys().length ? `<div class="services">${SERVICES
       // Only the viewer's own jobs (see myServiceKeys); extras faded — delivered cars show what was done
       .filter(s => myServiceKeys().includes(s.key))
