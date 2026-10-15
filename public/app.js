@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '105';
+const APP_VERSION = '106';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -599,7 +599,7 @@ const untouched = v => SERVICES.every(s => (v[`${s.key}_state`] ?? 'pending') ==
 const workStage = v => (untouched(v) ? 0 : v.services.length && v.done_at ? 2 : 1);
 // The car is waiting for one of MY jobs (asked for on it and still to do)
 const needsMe = v => myServiceKeys().some(k => v.services.includes(k) && v[`${k}_state`] === 'pending');
-// In prep: you see the cars YOU are working on; managers and the sold-cars person see all
+// In prep: you see the cars YOU are working on; managers see all
 const seesAllInPrep = () => isAdmin();
 const workingOnIt = v => SERVICES.some(s => v[`${s.key}_state`] === 'doing' && v[`${s.key}_by`] === S.me?.id);
 const onTab = (v, tab) => (tab === 'dent' ? inDent(v) : tab === 'viewing' ? inViewing(v)
@@ -642,7 +642,7 @@ function renderTabs() {
   print.hidden = !isAdmin() || !['sold', 'dent'].includes(S.tab);
   print.textContent = `🖨 Print ${TAB_TITLE[S.tab]?.toLowerCase()} list`;
   const fab = $('#fab');
-  // Adding stock and recording sales are admin-only (also enforced in the database)
+  // Adding stock is admin-only (also enforced in the database)
   fab.hidden = S.tab !== 'stock' || !isAdmin();
   fab.innerHTML = `${ICON.plus}<span>New stock</span>`;
   $('#photosFab').hidden = S.tab !== 'stock' || !isAdmin();
@@ -1386,7 +1386,7 @@ async function onListClick(e) {
       const { error } = await sb.from('vehicles').delete().eq('id', v.id);
       if (error) throw error;
       S.vehicles.delete(v.id);
-      await removePhotos([v.photo_path]);
+      await removePhotos([v.photo_path, ...(v.dent_photos ?? [])]);
       renderAll();
       toast('Vehicle deleted');
     } catch (err) { toast(errorText(err), { error: true }); }
@@ -1500,12 +1500,15 @@ function openHoldForm(v, kind) {
   const MAX_DENT_PHOTOS = 3;
   const keptPhotos = loan ? [] : [...(editing ? v.dent_photos ?? [] : [])];
   const newPhotos = [];
+  const previews = new Map();  // file → preview link (freed when the sheet closes)
+  const preview = file => { if (!previews.has(file)) previews.set(file, URL.createObjectURL(file)); return previews.get(file); };
+  const freePreviews = () => { previews.forEach(u => URL.revokeObjectURL(u)); previews.clear(); };
   const drawDentPhotos = () => {
     const box = $('#dentPhotos', form);
     if (!box) return;
     const tiles = [
       ...keptPhotos.map((p, i) => `<span class="dp"><img src="${esc(photoSrc(p) ?? '')}" alt=""><button type="button" data-drop-kept="${i}" aria-label="Remove">✕</button></span>`),
-      ...newPhotos.map((file, i) => `<span class="dp"><img src="${URL.createObjectURL(file)}" alt=""><button type="button" data-drop-new="${i}" aria-label="Remove">✕</button></span>`),
+      ...newPhotos.map((file, i) => `<span class="dp"><img src="${preview(file)}" alt=""><button type="button" data-drop-new="${i}" aria-label="Remove">✕</button></span>`),
     ];
     const room = keptPhotos.length + newPhotos.length < MAX_DENT_PHOTOS;
     box.innerHTML = tiles.join('') + (room ? `<label class="dp add">📷<small>Add photo</small><input type="file" accept="image/*" id="dentPhotoInput" hidden></label>` : '');
@@ -1546,6 +1549,7 @@ function openHoldForm(v, kind) {
       // Photos taken off this dent are deleted
       if (!loan) await removePhotos((v.dent_photos ?? []).filter(p => !keptPhotos.includes(p)));
       await refreshPhotoUrls();
+      freePreviews();
       closeSheet();
       renderAll();
       if (editing) toast('Saved');
@@ -1790,10 +1794,10 @@ async function purgeOld() {
   const cutoff = new Date(Date.now() - PURGE_DAYS * 864e5).toISOString();
   try {
     const { data, error } = await sb.from('vehicles').delete()
-      .eq('status', 'delivered').lt('delivered_at', cutoff).select('id, photo_path');
+      .eq('status', 'delivered').lt('delivered_at', cutoff).select('*');
     if (error) throw error;
     data.forEach(r => S.vehicles.delete(r.id));
-    await removePhotos(data.map(r => r.photo_path));
+    await removePhotos(data.flatMap(r => [r.photo_path, ...(r.dent_photos ?? [])]));
     renderAll();
     toast(data.length ? `Deleted ${data.length} old record${data.length === 1 ? '' : 's'}` : 'Nothing older than 30 days');
   } catch (err) { toast(errorText(err), { error: true }); }
@@ -1959,21 +1963,21 @@ function wirePlateHelpers(form, isNew) {
 }
 
 // Vehicle form. Modes:
-//   {}                          new stock vehicle
-//   { sold: true }              new sold vehicle (not from stock)
+//   {}                          new stock vehicle ("Already sold" for a car sold on arrival)
 //   { vehicle }                 edit
 //   { vehicle, convert: true }  stock → sold
-function openVehicleForm({ vehicle = null, sold = false, convert = false } = {}) {
+function openVehicleForm({ vehicle = null, convert = false } = {}) {
   const v = vehicle ?? {};
   const isNew = !vehicle;
-  const soldFields = sold || convert || (vehicle && vehicle.status !== 'stock');
-  const canBeSold = isNew && !sold;  // New stock: "Already sold" shows the sale fields
-  const title = convert ? 'Mark as sold' : isNew ? (sold ? 'New sale' : 'New stock vehicle') : 'Edit vehicle';
+  const soldFields = convert || (vehicle && vehicle.status !== 'stock');
+  const canBeSold = isNew;  // New stock: "Already sold" shows the sale fields
+  const title = convert ? 'Mark as sold' : isNew ? 'New stock vehicle' : 'Edit vehicle';
   const services = isNew ? [] : v.services;  // new cars: pick what they need
   const sellers = [...new Set([...S.vehicles.values()].map(x => clean(x.seller)).filter(Boolean))].sort();
 
   let newFile = null;
   let removePhoto = false;
+  let previewUrl = null;
   const existingUrl = photoSrc(v.photo_path);
 
   const svcPill = s => {
@@ -2082,7 +2086,9 @@ function openVehicleForm({ vehicle = null, sold = false, convert = false } = {})
     if (!file) return;
     newFile = file;
     removePhoto = false;
-    $('#photoPreview', form).innerHTML = `<img src="${URL.createObjectURL(file)}" alt="">`;
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = URL.createObjectURL(file);
+    $('#photoPreview', form).innerHTML = `<img src="${previewUrl}" alt="">`;
     $('#photoRemove', form).hidden = false;
   });
   $('#photoRemove', form).addEventListener('click', () => {
@@ -2243,14 +2249,14 @@ function openNewPassword() {
 // opens their settings. What each setting does:
 //   services     — the jobs they do: they only see those bubbles on the cars
 //                  (nothing ticked = a read-only summary; purely visual)
-//   handles_sold — can Start prep / Ready to go / Delivered on sold cars
+//   handles_sold — can Start prep / Ready to go on sold cars (Delivered: can_testdrive)
 //   sold_alerts  — gets prep / ready notifications and the 8am list
 //   loan_alerts  — gets a notification when a car is back from loan
 //   can_dent / can_bodyshop — may use Dent / Bodyshop
 //   show_count   — sees "my cars this month"
-//   can_testdrive — sales team: books viewings, marks test drives
+//   can_testdrive — sales team: books viewings, marks test drives, Delivered
 //   does_refresh — refresh team: viewing notifications + Start refresh / Refreshed
-//   is_admin     — adds / sells / edits cars, loans, Delivered and Pay report
+//   is_admin     — adds / sells / edits cars, loans, the Delivered tab and Pay report
 //   system_admin — sees the Team screen (only a system admin can change it)
 // The database enforces these too, and only admins can change them.
 function personTags(p) {
@@ -2895,8 +2901,6 @@ const TRAINING_SEARCHES = [
   ['First Clean / Tar Remove', 'car exterior wash tar and iron fallout removal how to'],
   ['Full Valet', 'full car valet interior and exterior step by step'],
   ['Polish / Compound', 'how to machine polish a car beginner dual action compound'],
-  ['Window Tint / Dechrome', 'how to dechrome car trim vinyl wrap tutorial'],
-  ['Windscreen', 'how to clean car windscreen streak free inside'],
 ];
 const ytSearch = q => `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
 const trainingHTML = () => `
@@ -2919,14 +2923,14 @@ const HELP = [
       <li><b>◐ Amber</b> — someone is working on it (shows their name).</li>
       <li><b>✓ Green</b> — done (shows who and when).</li>
       <li><b>Not needed on this car</b> — that job wasn’t asked for. Only a manager can add it (Edit).</li></ul>
-    <p><b>Tap ▶ when you start</b>, <b>tap again when you finish</b>. Finishing a Full Valet marks the First Clean done too. The <b>In prep</b> tab shows the cars you are working on. The job goes in <b>your name</b> — that’s what counts for pay (Full Valet) and for your monthly counter, so always use your own login.</p>
+    <p><b>Tap ▶ when you start</b>, <b>tap again when you finish</b>. Finishing a Full Valet takes the First Clean off the car if nobody started it (it isn’t needed any more). The <b>In prep</b> tab shows the cars you are working on. The job goes in <b>your name</b> — that’s what counts for pay (Full Valet) and for your monthly counter, so always use your own login.</p>
     <p>Tapped by mistake on a green one? Tap it twice to undo.</p>
     <p>🔒 A job someone else started or finished is theirs: only they (or a manager) can change it.</p>` },
   { id: 'tabs', title: 'What the tabs mean', tabs: ['stock', 'in_prep', 'sold', 'delivered'], body: `
     <ul><li><b>Deliveries</b> — sold cars waiting for delivery, by delivery day.</li>
       <li><b>Viewings</b> — cars booked for a viewing, by day and time, with their refresh.</li>
-      <li><b>Stock</b> — cars not sold, nobody working on them. Urgent cars, then cars waiting for <b>your</b> job, then cars with nothing done yet are on top. A car that arrived <b>already sold</b> stays here (SOLD) until all its jobs are done (or its delivery prep starts), then moves to Deliveries.</li>
-      <li><b>In prep</b> — someone is working on it right now. When the job is done it goes back to Stock (or to Deliveries).</li>
+      <li><b>Stock</b> — cars not sold, nobody working on them. Urgent cars, then cars waiting for <b>your</b> job, then cars with nothing done yet are on top. A car that arrived <b>already sold</b> stays here (SOLD) until all its jobs are done (or its delivery prep starts), then moves to Deliveries. <b>URGENT</b> comes off by itself when all the car’s jobs are done.</li>
+      <li><b>In prep</b> — the cars you are working on right now (managers see everyone’s). When the job is done it goes back to Stock (or to Deliveries).</li>
       <li><b>Bodyshop</b> — out for panel beating & paint.</li>
       <li><b>Dent</b> — the written dent list.</li>
       <li><b>Loan</b> — cars lent to customers.</li>
@@ -2936,7 +2940,7 @@ const HELP = [
     <p>The Deliveries tab groups the sold cars by delivery day: <b>Overdue</b>, <b>Today</b>, <b>Tomorrow</b>…</p>
     <p>Each morning the manager prints the day’s job sheet (<b>🖨 Print deliveries list</b>). Work top to bottom and tick ☐ as you go — and tap the job in the app too.</p>
     <p>Cars going out <b>today</b> have a red outline, and the red number on the Deliveries tab says how many.</p>
-    <p><b>Delivery prep</b> (the sold-cars person): tap <b>▶ Start prep</b> when you take the car — the boss gets a notification — and <b>✓ Ready to go</b> when it’s done. When the customer takes it, tap <b>Delivered</b>.</p>` },
+    <p><b>Delivery prep</b> (the sold-cars person): tap <b>▶ Start prep</b> when you take the car — the boss gets a notification — and <b>✓ Ready to go</b> when it’s done. When the customer takes it, the sales team taps <b>✓ Delivered</b>.</p>` },
   { id: 'viewing', title: 'Viewings & refresh', tabs: ['viewing'], body: `
     <p>The sales team taps <b>👀 Viewing</b> on a car and picks the day and time. The refresh team gets a notification, and the car goes to the top of Stock and on the <b>Viewings</b> tab.</p>
     <p>Refresh team: tap <b>▶ Start refresh</b> when you take the car and <b>✓ Refreshed</b> when it’s ready — whoever booked it is told each time.</p>
@@ -3209,7 +3213,7 @@ function wireUi() {
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#sheetBackdrop').hidden) closeSheet(); });
 }
 
-// Floating buttons (Photos / New stock / Sold / ?) slide away while you scroll
+// Floating buttons (Photos / New stock / ?) slide away while you scroll
 // down the list so they don't sit on top of the cards, and come back as soon as
 // you scroll up or reach the top / bottom.
 function wireFabHide() {
