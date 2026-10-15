@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '99';
+const APP_VERSION = '100';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -343,7 +343,7 @@ async function signLinks(paths) {
 }
 
 async function refreshPhotoUrls() {
-  const paths = [...new Set([...S.vehicles.values()].map(v => v.photo_path).filter(Boolean))]
+  const paths = [...new Set([...S.vehicles.values()].flatMap(v => [v.photo_path, ...(inDent(v) ? v.dent_photos ?? [] : [])]).filter(Boolean))]
     .filter(p => !S.thumbUrls.has(p) && !S.noThumb.has(p));
   if (!paths.length) return;
   const thumbs = await signLinks(paths.map(p => THUMB_DIR + p));
@@ -1033,7 +1033,7 @@ function cardHTML(v) {
 
   const b = (act, label, cls = 'ghost') => `<button class="btn small ${cls}" data-act="${act}">${label}</button>`;
   // Dent is for the people given "Can use Dent" on the Team screen (also enforced in the DB)
-  const dent = canDent() ? b('dent', inDent(v) ? 'Dent ✓' : 'Dent') : '';
+  const dent = canDent() ? b('dent', inDent(v) ? 'Dent ✓' : 'Dent', `ghost dent-btn${inDent(v) ? ' on' : ''}`) : '';
   const edit = isAdmin() ? b('edit', 'Edit') : '';  // editing car details is admin-only (also in the DB)
   // Bodyshop is for the people given "Can use Bodyshop" on the Team screen (also enforced in the DB)
   const body = canBodyshop() ? b('bodyshop', 'Bodyshop') : '';
@@ -1150,9 +1150,12 @@ function dentHTML(list) {
       <span class="vehicle-name">${esc([v.make, v.model].map(clean).filter(Boolean).join(' ') || 'Unknown vehicle')} ${colourHTML(v.color)}</span>
       <span class="dent-where">${esc(whereLabel(v))}</span>
     </div>
-    <div class="dent-fix">${esc(v.dent_notes || '—')}</div>
+    <div class="dent-fix">${esc(v.dent_notes || '—')}${(v.dent_photos ?? []).length ? `<div class="dent-photos">${v.dent_photos.map(p => {
+      const u = photoSrc(p);
+      return u ? `<img src="${esc(u)}" alt="Dent photo" data-act="dentphoto" data-path="${esc(p)}" loading="lazy">` : '<span class="dent-photo-wait">📷</span>';
+    }).join('')}</div>` : ''}</div>
     ${canDent() || canFinishDent() ? `<div class="dent-actions">
-      ${canDent() ? '<button class="btn small ghost" data-act="dent">Edit</button>' : ''}
+      ${canDent() ? '<button class="btn small ghost dent-btn" data-act="dent">Edit</button>' : ''}
       ${canFinishDent() ? `<button class="btn small accent" data-act="dentdone">${ICON.check} Done</button>` : ''}
     </div>` : ''}
   </div>`;
@@ -1347,6 +1350,7 @@ async function onListClick(e) {
   if (act === 'bodyshop') return canBodyshop() && openBodyshopForm(v);
   if (act === 'release') return (v.hold === 'bodyshop' ? canBodyshop() : isAdmin()) && releaseHold(v);
   if (act === 'dentdone') return canFinishDent() && dentDone(v);
+  if (act === 'dentphoto') return openPhotoPath(btn.dataset.path, [v.reg_ie, v.reg_imp].filter(Boolean).join(' / '));
 
   if (act === 'viewing') return canTestdrive() && openViewingForm(v);
   if (act === 'testdrive' || act === 'testback') return canTestdrive() && setTestdrive(v, act === 'testdrive');
@@ -1466,7 +1470,9 @@ function openHoldForm(v, kind) {
       <label>Customer name<input name="loan_to" value="${esc(v.loan_to)}" autocapitalize="words" required></label>
       <label>Phone<input name="loan_phone" type="tel" value="${esc(v.loan_phone)}" inputmode="tel"></label>
       <label>Back by<input name="loan_due" type="date" value="${esc(v.loan_due)}"></label>`
-    : `<label>Where is the dent?<textarea name="dent_notes" rows="3" placeholder="e.g. rear left door, small dent on bonnet">${esc(v.dent_notes)}</textarea></label>`}
+    : `<label>Where is the dent?<textarea name="dent_notes" rows="3" placeholder="e.g. rear left door, small dent on bonnet">${esc(v.dent_notes)}</textarea></label>
+      ${'dent_photos' in v ? `<div class="section-label">Photos of the dent (up to 3)</div>
+      <div class="dent-photo-edit" id="dentPhotos"></div>` : ''}`}
     <p class="form-error" id="holdError" hidden></p>
     <div class="sheet-actions">
       ${!loan && editing && canFinishDent() ? `<button type="button" class="btn ghost danger" id="dentRemove">Take off list</button><span class="spacer"></span>` : ''}
@@ -1475,6 +1481,32 @@ function openHoldForm(v, kind) {
     </div>
   </form>`);
   const form = $('#holdForm', sheet);
+  // Dent photos: kept ones (paths) + new ones (files), at most 3
+  const MAX_DENT_PHOTOS = 3;
+  const keptPhotos = loan ? [] : [...(editing ? v.dent_photos ?? [] : [])];
+  const newPhotos = [];
+  const drawDentPhotos = () => {
+    const box = $('#dentPhotos', form);
+    if (!box) return;
+    const tiles = [
+      ...keptPhotos.map((p, i) => `<span class="dp"><img src="${esc(photoSrc(p) ?? '')}" alt=""><button type="button" data-drop-kept="${i}" aria-label="Remove">✕</button></span>`),
+      ...newPhotos.map((file, i) => `<span class="dp"><img src="${URL.createObjectURL(file)}" alt=""><button type="button" data-drop-new="${i}" aria-label="Remove">✕</button></span>`),
+    ];
+    const room = keptPhotos.length + newPhotos.length < MAX_DENT_PHOTOS;
+    box.innerHTML = tiles.join('') + (room ? `<label class="dp add">📷<small>Add photo</small><input type="file" accept="image/*" id="dentPhotoInput" hidden></label>` : '');
+  };
+  drawDentPhotos();
+  form.addEventListener('change', e => {
+    if (e.target.id !== 'dentPhotoInput') return;
+    const file = e.target.files?.[0];
+    if (file && keptPhotos.length + newPhotos.length < MAX_DENT_PHOTOS) newPhotos.push(file);
+    drawDentPhotos();
+  });
+  form.addEventListener('click', e => {
+    const k = e.target.closest('[data-drop-kept]'), n = e.target.closest('[data-drop-new]');
+    if (k) { keptPhotos.splice(Number(k.dataset.dropKept), 1); drawDentPhotos(); }
+    if (n) { newPhotos.splice(Number(n.dataset.dropNew), 1); drawDentPhotos(); }
+  });
   form.onsubmit = async e => {
     e.preventDefault();
     const f = form.elements;
@@ -1488,15 +1520,26 @@ function openHoldForm(v, kind) {
     if (!loan && !patch.dent_notes) return fail('Write where the dent is.');
     const btn = form.querySelector('[type=submit]');
     btn.disabled = true;
+    let uploaded = [];
     try {
+      if (!loan && $('#dentPhotos', form)) {
+        btn.textContent = newPhotos.length ? 'Uploading photos…' : btn.textContent;
+        uploaded = await Promise.all(newPhotos.map(uploadPhoto));
+        patch.dent_photos = [...keptPhotos, ...uploaded];
+      }
       const saved = await updateVehicle(v.id, patch);
+      // Photos taken off this dent are deleted
+      if (!loan) await removePhotos((v.dent_photos ?? []).filter(p => !keptPhotos.includes(p)));
+      await refreshPhotoUrls();
       closeSheet();
       renderAll();
       if (editing) toast('Saved');
       else if (loan) announceMove(v, saved);
       else toast('Added to the Dent list', { action: { label: 'Show', run: () => switchTab('dent') } });
     } catch (err) {
+      if (uploaded.length) await removePhotos(uploaded);
       btn.disabled = false;
+      btn.textContent = editing ? 'Save' : loan ? 'Loan car' : 'Add to Dent list';
       fail(errorText(err));
     }
   };
@@ -1696,14 +1739,18 @@ function openBodyshopForm(v) {
 
 // Take a car off the Dent list (repair done), with Undo.
 async function dentDone(v) {
-  const patch = { dent_notes: '', dent_date: null, dent_since: null };
-  const undo = { dent_notes: v.dent_notes, dent_date: v.dent_date, dent_since: v.dent_since };
+  const photos = v.dent_photos ?? [];
+  const patch = { dent_notes: '', dent_date: null, dent_since: null, ...('dent_photos' in v ? { dent_photos: [] } : {}) };
+  const undo = { dent_notes: v.dent_notes, dent_date: v.dent_date, dent_since: v.dent_since, ...('dent_photos' in v ? { dent_photos: photos } : {}) };
+  let undone = false;
   try {
     await updateVehicle(v.id, patch);
     renderAll();
     toast('Dent done — taken off the list', {
-      action: { label: 'Undo', run: async () => { await updateVehicle(v.id, undo); renderAll(); } },
+      action: { label: 'Undo', run: async () => { undone = true; await updateVehicle(v.id, undo); renderAll(); } },
     });
+    // The photos are deleted once the Undo is no longer offered
+    if (photos.length) setTimeout(() => { if (!undone) removePhotos(photos); }, 9000);
   } catch (err) { toast(errorText(err), { error: true }); }
 }
 
@@ -1756,6 +1803,12 @@ function closeSheet() {
 }
 
 const sheetHead = title => `<div class="sheet-head"><h2>${esc(title)}</h2><button type="button" class="icon-btn" data-close aria-label="Close">${ICON.close}</button></div>`;
+
+// Any stored photo, full size (e.g. a dent photo)
+async function openPhotoPath(path, title) {
+  const url = path && await fullPhotoUrl(path);
+  if (url) openSheet(`${sheetHead(title || 'Photo')}<img class="photo-full" src="${esc(url)}" alt="">`);
+}
 
 async function openPhoto(v) {
   const url = v.photo_path && await fullPhotoUrl(v.photo_path);
@@ -2913,7 +2966,7 @@ const HELP = [
     <p>Did something on a car that isn’t one of the job bubbles (e.g. <i>grille wrapped</i>, <i>diffuser sprayed</i>)? Tap <b>🔧 Log</b> on its card and write it. Your name and the date are added by themselves.</p>
     <p>The card shows the latest entry; tap it to see everything done on that car. Fixed issues are logged automatically.</p>` },
   { id: 'dent', title: 'Dent list', tabs: ['dent'], body: `
-    <p>Tap <b>Dent</b> on a car and write where the dent is. The car stays where it is — it’s just added to the list.</p>
+    <p>Tap <b>Dent</b> on a car, write where the dent is and add up to 3 photos. The car stays where it is — it’s just added to the list, where the photos show (tap one to enlarge).</p>
     <p>The manager can print the list from the <b>Dent</b> tab. When a car is fixed, the person who signs dents off taps <b>Done</b>.</p>` },
   { id: 'bodyshop', title: 'Bodyshop', tabs: ['bodyshop'], body: `
     <p>When a car goes out for panel beating & paint, tap <b>Bodyshop</b> on it, write what’s being done, which bodyshop and when it’s due back. It moves to the <b>Bodyshop</b> tab (red when overdue).</p>

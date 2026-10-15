@@ -685,3 +685,17 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 }
 .online-pill .dot-on { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,.25); }
 @media (max-width: 420px) { .online-pill { padding: 4px 8px; font-size: 12px; } }
+
+/* Dent: lilac button (filled when the car is on the list) and dent photos */
+.btn.dent-btn { border-color: #7c5ce6; color: #6a4bd6; }
+.btn.dent-btn.on { background: #5b3fd1; border-color: #5b3fd1; color: #fff; }
+@media (prefers-color-scheme: dark) { .btn.dent-btn:not(.on) { color: #b9a6ff; border-color: #6a55c9; } }
+.dent-photos { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.dent-photos img { width: 64px; height: 48px; object-fit: cover; border-radius: 6px; cursor: pointer; border: 1px solid var(--border); }
+.dent-photo-wait { width: 64px; height: 48px; display: grid; place-items: center; border-radius: 6px; background: var(--surface-2); }
+.dent-photo-edit { display: flex; gap: 8px; flex-wrap: wrap; }
+.dent-photo-edit .dp { position: relative; width: 84px; height: 64px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); background: var(--surface-2); }
+.dent-photo-edit .dp img { width: 100%; height: 100%; object-fit: cover; }
+.dent-photo-edit .dp button { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border-radius: 50%; border: 0; background: rgba(0,0,0,.65); color: #fff; font-size: 12px; cursor: pointer; }
+.dent-photo-edit .dp.add { display: grid; place-items: center; align-content: center; gap: 2px; cursor: pointer; border-style: dashed; font-size: 20px; }
+.dent-photo-edit .dp.add small { font-size: 11px; color: var(--muted); }
