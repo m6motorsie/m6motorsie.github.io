@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '102';
+const APP_VERSION = '103';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1072,8 +1072,8 @@ function cardHTML(v) {
     actions = (onTestdrive(v) ? b('testback', `${ICON.check} Back from test drive`, 'accent') : b('testdrive', '🚗 Test drive')) + actions;
   }
   // Anyone on staff can note a problem (wheels, missing part…)
-  if (S.workLogReady && worksOnCars() && v.status !== 'delivered') actions = b('worklog', '🔧 Log') + actions;
-  if (S.issuesReady && worksOnCars() && v.status !== 'delivered') actions = b('issues', openIssues(v).length ? `⚠ Issues (${openIssues(v).length})` : '+ Issue') + actions;
+  if (S.workLogReady && worksOnCars() && v.status !== 'delivered') actions = b('worklog', '🔧 Log', 'ghost log-btn') + actions;
+  if (S.issuesReady && worksOnCars() && v.status !== 'delivered') actions = b('issues', openIssues(v).length ? `⚠ Issues (${openIssues(v).length})` : '+ Issue', `ghost issue-btn${openIssues(v).length ? ' on' : ''}`) + actions;
 
   // Red outline: urgent, going out today (or overdue), or a loan / bodyshop car that's late back
   const flagged = (v.status !== 'delivered' && v.urgent) || (sold && dueToday(v)) || (tab === 'loan' && v.loan_due && dayDiff(v.loan_due) < 0)

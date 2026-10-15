@@ -706,3 +706,9 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 .ready-big .btn.ghost { flex: 0 0 auto; }
 .ready-waiting { font-size: 12.5px; color: var(--doing-fg); font-weight: 600; margin-bottom: -4px; }
 .ready-big .btn[disabled] { opacity: .3; cursor: not-allowed; }
+
+/* Issue button orange (filled when the car has open issues), Log teal (outline only) */
+.btn.issue-btn { border-color: var(--issue-bd); color: var(--issue-fg); }
+.btn.issue-btn.on { background: var(--issue-bd); border-color: var(--issue-bd); color: #fff; }
+.btn.log-btn { border-color: #14b8a6; color: #0f766e; }
+@media (prefers-color-scheme: dark) { .btn.log-btn { border-color: #2a9d90; color: #5eead4; } }
