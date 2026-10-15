@@ -668,7 +668,7 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
   .tabs { grid-auto-columns: minmax(58px, 1fr); overflow-x: auto; scrollbar-width: none; }
   .tabs::-webkit-scrollbar { display: none; }
 }
-.chip.testdrive { background: #6d28d9; border-color: #6d28d9; color: #fff; font-weight: 700; }
+.chip.testdrive { background: #be185d; border-color: #be185d; color: #fff; font-weight: 700; }
 .arrival-notes { display: grid; gap: 10px; }
 .arrival-notes:empty { display: none; }
 
@@ -712,3 +712,16 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 .btn.issue-btn.on { background: var(--issue-bd); border-color: var(--issue-bd); color: #fff; }
 .btn.log-btn { border-color: #14b8a6; color: #0f766e; }
 @media (prefers-color-scheme: dark) { .btn.log-btn { border-color: #2a9d90; color: #5eead4; } }
+
+/* Mark sold green, Loan mustard, Test drive pink, Viewing petrol blue (filled when active) */
+.btn.sell-btn { background: #15803d; border-color: #15803d; color: #fff; }
+.btn.loan-btn { border-color: #ca8a04; color: #a16207; }
+.btn.testdrive-btn { border-color: #db2777; color: #be185d; }
+.btn.testdrive-btn.on { background: #be185d; border-color: #be185d; color: #fff; }
+.btn.viewing-btn { border-color: #0e7490; color: #0e7490; }
+.btn.viewing-btn.on { background: #0e7490; border-color: #0e7490; color: #fff; }
+@media (prefers-color-scheme: dark) {
+  .btn.loan-btn { border-color: #a16207; color: #facc15; }
+  .btn.testdrive-btn:not(.on) { border-color: #be185d; color: #f472b6; }
+  .btn.viewing-btn:not(.on) { border-color: #0e7490; color: #67d3e6; }
+}

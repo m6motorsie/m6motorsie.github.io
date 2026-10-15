@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '103';
+const APP_VERSION = '104';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -819,7 +819,7 @@ function readyButtons(v) {
   if (!canReady()) return '';
   const undo = label => `<button class="btn small ghost" data-act="unready" title="Back to not started">${label}</button>`;
   if (v.ready_state === 'doing') return undo('Cancel') + `<button class="btn small accent" data-act="ready">${ICON.check} Ready to go</button>`;
-  if (v.ready_state === 'done') return undo('↺ Undo') + `<button class="btn small ghost" data-act="deliver">Delivered</button>`;
+  if (v.ready_state === 'done') return undo('↺ Undo');  // handing the car over is for the sales team
   return `<button class="btn small primary" data-act="ready">▶ Start prep</button>`;
 }
 
@@ -1053,23 +1053,22 @@ function cardHTML(v) {
   let actions;
   if (tab === 'delivered') actions = b('reopen', 'Reopen');
   else if (tab === 'bodyshop') actions = edit + (canBodyshop() ? b('bodyshop', 'Details') + b('release', `${ICON.check} Back from bodyshop`, 'accent') : '');
-  else if (tab === 'loan') actions = edit + (isAdmin() ? b('loan', 'Loan details') + b('release', `${ICON.check} Returned`, 'accent') : '');
+  else if (tab === 'loan') actions = edit + (isAdmin() ? b('loan', 'Loan details', 'ghost loan-btn') + b('release', `${ICON.check} Returned`, 'accent') : '');
   else if (sold) {
-    // Managers can hand a car over too: going out today / overdue, or ready to go
-    const ryannHasIt = canReady() && v.ready_state === 'done';  // readyButtons already shows Delivered
-    const deliver = isAdmin() && !ryannHasIt && (dueToday(v) || v.ready_state === 'done')
+    // The sales team hands the car over: going out today / overdue, or ready to go (036_*.sql)
+    const deliver = canTestdrive() && (dueToday(v) || v.ready_state === 'done')
       ? b('deliver', `${ICON.check} Delivered`, 'accent') : '';
     actions = edit + body + dent + (soldPersonOnly() ? '' : readyButtons(v)) + deliver;
   }
-  else actions = edit + (isAdmin() ? b('loan', 'Loan') : '') + body + dent + (isAdmin() ? b('sell', 'Mark sold', 'primary') : '');
+  else actions = edit + (isAdmin() ? b('loan', 'Loan', 'ghost loan-btn') : '') + body + dent + (isAdmin() ? b('sell', 'Mark sold', 'sell-btn') : '');
   const remove = isAdmin() && v.status !== 'delivered' ? `${b('remove', 'Delete', 'ghost danger')}<span class="spacer"></span>` : '';
   // Viewings: the sales team books them; the refresh people get Start refresh / Refreshed
   if ('viewing_at' in v && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)) {  // (after 027_*.sql)
     actions = refreshButtons(v) + actions;
-    if (canTestdrive()) actions += b('viewing', inViewing(v) ? '👀 Viewing ✓' : '👀 Viewing');  // sales team (030_*.sql)
+    if (canTestdrive()) actions += b('viewing', inViewing(v) ? '👀 Viewing ✓' : '👀 Viewing', `ghost viewing-btn${inViewing(v) ? ' on' : ''}`);  // sales team (030_*.sql)
   }
   if ('testdrive_since' in v && canTestdrive() && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)) {  // (after 028_*.sql)
-    actions = (onTestdrive(v) ? b('testback', `${ICON.check} Back from test drive`, 'accent') : b('testdrive', '🚗 Test drive')) + actions;
+    actions = (onTestdrive(v) ? b('testback', `${ICON.check} Back from test drive`, 'testdrive-btn on') : b('testdrive', '🚗 Test drive', 'ghost testdrive-btn')) + actions;
   }
   // Anyone on staff can note a problem (wheels, missing part…)
   if (S.workLogReady && worksOnCars() && v.status !== 'delivered') actions = b('worklog', '🔧 Log', 'ghost log-btn') + actions;
@@ -1375,6 +1374,7 @@ async function onListClick(e) {
   if (act === 'ready') return cycleReady(v, btn);
   if (act === 'unready') return cycleReady(v, btn, 'pending');
   if (act === 'deliver') {
+    if (!canTestdrive()) return;
     if (!v.done_at && !confirmTap(btn, 'Not finished — tap again')) return;
     return setStatus(v, 'delivered', { undo: true });
   }
@@ -1428,11 +1428,10 @@ async function cycleService(v, key, btn) {
   const patch = { [`${key}_state`]: next };
   // Tapping a service the car wasn't asked for adds it to the car and starts it
   if (!v.services.includes(key)) patch.services = SERVICES.map(s => s.key).filter(k => v.services.includes(k) || k === key);
-  // A finished Full Valet includes the First Clean: mark it done too, unless
-  // someone else is in the middle of it
-  const firstToo = key === 'full' && next === 'done' && v.services.includes('first') && v.first_state !== 'done'
-    && !(v.first_state === 'doing' && v.first_by && v.first_by !== S.me.id);
-  if (firstToo) patch.first_state = 'done';
+  // A finished Full Valet covers the First Clean: if nobody started it, the car
+  // no longer needs it (taken off the car's jobs — not counted for anyone, 036_*.sql)
+  const dropFirst = key === 'full' && next === 'done' && v.services.includes('first') && v.first_state === 'pending';
+  if (dropFirst) patch.services = (patch.services ?? v.services).filter(k => k !== 'first');
 
   // Optimistic update; the server fills in the real who/when.
   const before = { ...v };
@@ -1441,7 +1440,6 @@ async function cycleService(v, key, btn) {
     ...patch,
     [`${key}_by`]: next === 'pending' ? null : (v[`${key}_by`] ?? S.me.id),
     [`${key}_done_at`]: next === 'done' ? new Date().toISOString() : null,
-    ...(firstToo ? { first_by: v.first_by ?? S.me.id, first_done_at: new Date().toISOString() } : {}),
   });
   renderAll();
   try {
@@ -2761,7 +2759,8 @@ async function loadMyMonth() {
     .select('service, plate, vehicle, done_at')
     .eq('user_id', S.me.id).gte('done_at', monthStart().toISOString())
     .order('done_at', { ascending: false });
-  S.myMonth = error ? null : data;
+  // Only their own jobs (e.g. Full Valet for the Full Valet team)
+  S.myMonth = error ? null : data.filter(r => !myServiceKeys().length || myServiceKeys().includes(r.service));
 }
 let myMonthTimer = null;
 function queueMyMonth() {
