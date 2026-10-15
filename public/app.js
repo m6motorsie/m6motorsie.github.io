@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '96';
+const APP_VERSION = '97';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -184,7 +184,9 @@ const S = {
   me: null,                 // current user's profile
   profiles: new Map(),      // id → profile
   vehicles: new Map(),      // id → row
-  photoUrls: new Map(),     // storage path → signed URL
+  photoUrls: new Map(),     // storage path → signed URL of the full photo (only when opened)
+  thumbUrls: new Map(),     // storage path → signed URL of its small thumbnail (cards, pickers)
+  noThumb: new Set(),       // photos that don't have a thumbnail yet (one gets made)
   tab: 'sold',
   view: 'main',
   search: '',
@@ -243,6 +245,7 @@ async function loadAll() {
   S.profiles = new Map(p.data.map(x => [x.id, x]));
   S.me = S.profiles.get(S.session.user.id) ?? null;
   S.vehicles = new Map(v.data.map(x => [x.id, x]));
+  S.syncedAt = syncMark();
   await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMyMonth(), loadIssues(), loadWorkLog()]);
 }
 
@@ -280,11 +283,81 @@ async function loadSupplies() {
   S.suppliesReady = !error;
 }
 
+// ---------------------------------------------------------------------
+// Photos — kept light on data (Supabase's free plan counts every download):
+// cards show a small thumbnail (thumbs/<path>, ~15 KB), the full photo is only
+// fetched when someone opens it, and signed links are reused for days so the
+// phone's cache can do its job. Photos from before thumbnails existed get one
+// made the first time they're shown.
+// ---------------------------------------------------------------------
+const THUMB_DIR = 'thumbs/';
+const SIGN_SECONDS = 7 * 24 * 60 * 60;
+const LINKS_KEY = 'm6.signedLinks';
+const savedLinks = (() => { try { return JSON.parse(localStorage.getItem(LINKS_KEY) || '{}'); } catch { return {}; } })();
+const keepLink = (key, url) => {
+  savedLinks[key] = { u: url, e: Date.now() + (SIGN_SECONDS - 3600) * 1000 };
+  try { localStorage.setItem(LINKS_KEY, JSON.stringify(savedLinks)); } catch {}
+};
+const savedLink = key => { const x = savedLinks[key]; return x && x.e > Date.now() ? x.u : null; };
+
+// Signed links for paths, reusing saved ones; returns { path: url } (missing files left out)
+async function signLinks(paths) {
+  const out = {}, need = [];
+  for (const p of new Set(paths)) { const u = savedLink(p); u ? (out[p] = u) : need.push(p); }
+  if (need.length) {
+    const { data } = await sb.storage.from(BUCKET).createSignedUrls(need, SIGN_SECONDS);
+    for (const item of data ?? []) if (item.signedUrl && !item.error) { out[item.path] = item.signedUrl; keepLink(item.path, item.signedUrl); }
+  }
+  return out;
+}
+
 async function refreshPhotoUrls() {
-  const missing = [...S.vehicles.values()].map(v => v.photo_path).filter(p => p && !S.photoUrls.has(p));
-  if (!missing.length) return;
-  const { data } = await sb.storage.from(BUCKET).createSignedUrls([...new Set(missing)], 60 * 60 * 12);
-  for (const item of data ?? []) if (item.signedUrl) S.photoUrls.set(item.path, item.signedUrl);
+  const paths = [...new Set([...S.vehicles.values()].map(v => v.photo_path).filter(Boolean))]
+    .filter(p => !S.thumbUrls.has(p) && !S.noThumb.has(p));
+  if (!paths.length) return;
+  const thumbs = await signLinks(paths.map(p => THUMB_DIR + p));
+  const without = [];
+  for (const p of paths) thumbs[THUMB_DIR + p] ? S.thumbUrls.set(p, thumbs[THUMB_DIR + p]) : without.push(p);
+  if (!without.length) return;
+  // No thumbnail yet: show the full photo for now (a manager's app makes the thumbnail)
+  without.forEach(p => S.noThumb.add(p));
+  const full = await signLinks(without);
+  for (const p of without) if (full[p]) S.photoUrls.set(p, full[p]);
+  if (isAdmin()) without.forEach(queueThumb);  // one manager's phone makes them, not everyone's
+}
+
+// The small picture for a card / picker (falls back to the full photo meanwhile)
+const photoSrc = path => (path ? S.thumbUrls.get(path) ?? S.photoUrls.get(path) ?? null : null);
+
+// The full photo, fetched only when someone opens it
+async function fullPhotoUrl(path) {
+  if (!S.photoUrls.has(path)) { const l = await signLinks([path]); if (l[path]) S.photoUrls.set(path, l[path]); }
+  return S.photoUrls.get(path) ?? null;
+}
+
+// Make missing thumbnails one at a time, in the background
+const thumbQueue = [];
+let thumbBusy = false;
+function queueThumb(path) {
+  if (!thumbQueue.includes(path)) thumbQueue.push(path);
+  if (!thumbBusy) runThumbs();
+}
+async function runThumbs() {
+  thumbBusy = true;
+  while (thumbQueue.length) {
+    const path = thumbQueue.shift();
+    try {
+      const { data: blob, error } = await sb.storage.from(BUCKET).download(path);
+      if (error || !blob) continue;
+      const small = await compressImage(blob, 320, 0.72);
+      await sb.storage.from(BUCKET).upload(THUMB_DIR + path, small, { contentType: 'image/jpeg', cacheControl: '2592000' });
+      // (someone else may have made it first — either way it exists now)
+      const l = await signLinks([THUMB_DIR + path]);
+      if (l[THUMB_DIR + path]) { S.thumbUrls.set(path, l[THUMB_DIR + path]); S.noThumb.delete(path); }
+    } catch { /* try again next time the app opens */ }
+  }
+  thumbBusy = false;
+  renderAll();
 }
 
 function upsertLocal(row) {
@@ -370,16 +443,18 @@ const ago = ts => {
 };
 
 async function uploadPhoto(file) {
-  const blob = await compressImage(file);
+  const [blob, small] = await Promise.all([compressImage(file), compressImage(file, 320, 0.72)]);
   const path = `${crypto.randomUUID()}.jpg`;
-  const { error } = await sb.storage.from(BUCKET).upload(path, blob, { contentType: 'image/jpeg' });
+  const opts = { contentType: 'image/jpeg', cacheControl: '2592000' };  // phones may keep it 30 days
+  const { error } = await sb.storage.from(BUCKET).upload(path, blob, opts);
   if (error) throw error;
+  await sb.storage.from(BUCKET).upload(THUMB_DIR + path, small, opts);  // card thumbnail
   return path;
 }
 
 async function removePhotos(paths) {
   paths = paths.filter(Boolean);
-  if (paths.length) await sb.storage.from(BUCKET).remove(paths);
+  if (paths.length) await sb.storage.from(BUCKET).remove([...paths, ...paths.map(p => THUMB_DIR + p)]);
 }
 
 async function updateVehicle(id, patch) {
@@ -867,7 +942,7 @@ async function cycleReady(v, btn, next = v.ready_state === 'doing' ? 'done' : 'd
 }
 
 function cardHTML(v) {
-  const url = v.photo_path && S.photoUrls.get(v.photo_path);
+  const url = photoSrc(v.photo_path);
   const tab = tabOf(v);
   const sold = isSold(v);
   const chips = [];
@@ -1643,8 +1718,8 @@ function closeSheet() {
 
 const sheetHead = title => `<div class="sheet-head"><h2>${esc(title)}</h2><button type="button" class="icon-btn" data-close aria-label="Close">${ICON.close}</button></div>`;
 
-function openPhoto(v) {
-  const url = S.photoUrls.get(v.photo_path);
+async function openPhoto(v) {
+  const url = v.photo_path && await fullPhotoUrl(v.photo_path);
   if (!url) return;
   openSheet(`${sheetHead([v.reg_ie, v.reg_imp].filter(Boolean).join(' / '))}<img class="photo-full" src="${esc(url)}" alt="">`);
 }
@@ -1673,7 +1748,7 @@ function openPhotoPicker() {
     const q = norm($('#photoSearch', sheet).value);
     const shown = cars.filter(v => !q || [v.reg_ie, v.reg_imp, v.make, v.model].some(f => norm(f).includes(q)));
     $('#photoList', sheet).innerHTML = shown.length ? shown.map(v => {
-      const url = v.photo_path && S.photoUrls.get(v.photo_path);
+      const url = photoSrc(v.photo_path);
       return `<label class="pick photo-pick">
         <input type="checkbox" data-id="${v.id}" ${picked.has(v.id) ? 'checked' : ''}>
         ${url ? `<img class="thumb" src="${esc(url)}" alt="">` : `<span class="thumb placeholder">${ICON.car}</span>`}
@@ -1727,7 +1802,7 @@ function openSoldPicker() {
       .filter(v => !q || [v.reg_ie, v.reg_imp, v.make, v.model].some(f => norm(f).includes(q)))
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     $('#pickList').innerHTML = cars.length ? cars.map(v => {
-      const url = v.photo_path && S.photoUrls.get(v.photo_path);
+      const url = photoSrc(v.photo_path);
       return `<button type="button" class="pick" data-id="${v.id}">
         ${url ? `<img class="thumb" src="${esc(url)}" alt="">` : `<span class="thumb placeholder">${ICON.car}</span>`}
         <span>${plateHTML(v)}<span class="muted">${esc(`${v.make} ${v.model}`.trim())}</span></span>
@@ -1760,7 +1835,7 @@ function openVehicleForm({ vehicle = null, sold = false, convert = false } = {})
 
   let newFile = null;
   let removePhoto = false;
-  const existingUrl = v.photo_path && S.photoUrls.get(v.photo_path);
+  const existingUrl = photoSrc(v.photo_path);
 
   const svcPill = s => {
     const locked = !isNew && v[`${s.key}_state`] === 'done';
@@ -3067,10 +3142,34 @@ async function checkForUpdate() {
   });
 }
 
+// A little before now, so a change made while we were loading isn't missed
+const syncMark = () => new Date(Date.now() - 2 * 60 * 1000).toISOString();
+const canSyncChanges = () => !!S.syncedAt && [...S.vehicles.values()].some(v => 'updated_at' in v);
+
+// Coming back to the app: only the cars changed since last time (+ the id list,
+// to notice deleted cars), instead of downloading every car again.
+async function loadChanges() {
+  const mark = syncMark();
+  const [changed, ids, p] = await Promise.all([
+    sb.from('vehicles').select('*').gt('updated_at', S.syncedAt),
+    sb.from('vehicles').select('id'),
+    sb.from('profiles').select('*'),
+  ]);
+  const err = changed.error || ids.error || p.error;
+  if (err) throw err;
+  const keep = new Set(ids.data.map(r => r.id));
+  for (const id of [...S.vehicles.keys()]) if (!keep.has(id)) S.vehicles.delete(id);
+  for (const row of changed.data) S.vehicles.set(row.id, row);
+  S.profiles = new Map(p.data.map(x => [x.id, x]));
+  S.me = S.profiles.get(S.session.user.id) ?? S.me;
+  S.syncedAt = mark;
+  await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMyMonth(), loadIssues(), loadWorkLog()]);
+}
+
 async function refreshData() {
   if (!S.session || !S.me) return;
   try {
-    await loadAll();
+    if (canSyncChanges()) await loadChanges(); else await loadAll();
     renderAll();
     subscribe();
   } catch { /* offline for a moment — the next return will try again */ }
