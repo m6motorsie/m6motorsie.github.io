@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '101';
+const APP_VERSION = '102';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1099,7 +1099,10 @@ function cardHTML(v) {
       .filter(s => !isExtra(v, s.key) || (isAdmin() && v.status !== 'delivered'))
       .map(s => serviceHTML(v, s.key)).join('')}</div>
     ${notNeededHTML(v)}
-    ${otherJobsHTML(v)}` : sold && soldPersonOnly() ? readyBlockHTML(v) : jobStatusHTML(v)}
+    ${otherJobsHTML(v)}` : soldPersonOnly() && v.status !== 'delivered'
+      // not sold yet: the same button, faded — nothing to start until it's sold
+      ? (sold ? readyBlockHTML(v) : '<div class="ready-big"><button class="btn small primary" disabled title="Only once the car is sold">▶ Start prep</button></div>')
+      : jobStatusHTML(v)}
     ${sold ? readyStatusHTML(v) : ''}
     ${refreshStatusHTML(v)}
     <div class="card-actions">${remove}${actions}</div>
