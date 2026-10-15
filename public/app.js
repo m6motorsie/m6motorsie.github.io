@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '97';
+const APP_VERSION = '98';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -162,17 +162,24 @@ function confirmTap(btn, label = 'Tap again to confirm') {
   return false;
 }
 
+// Resize to JPEG. The bitmap and canvas are freed straight away: phones (iPhone
+// above all) close the app if decoded photos pile up in memory.
 async function compressImage(file, maxSide = 1400, quality = 0.82) {
+  let bmp = null;
+  const canvas = document.createElement('canvas');
   try {
-    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
     const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
-    const canvas = document.createElement('canvas');
     canvas.width = Math.round(bmp.width * scale);
     canvas.height = Math.round(bmp.height * scale);
     canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    bmp.close(); bmp = null;
     return await new Promise(res => canvas.toBlob(b => res(b || file), 'image/jpeg', quality));
   } catch {
     return file;
+  } finally {
+    bmp?.close();
+    canvas.width = canvas.height = 0;
   }
 }
 
@@ -342,14 +349,22 @@ function queueThumb(path) {
   if (!thumbQueue.includes(path)) thumbQueue.push(path);
   if (!thumbBusy) runThumbs();
 }
+// A few at a time, gently: some per app session, with pauses, starting after
+// the app has settled — the rest are made the next times the app is opened.
+const THUMBS_PER_SESSION = 12;
+let thumbsMade = 0;
 async function runThumbs() {
   thumbBusy = true;
-  while (thumbQueue.length) {
+  await new Promise(r => setTimeout(r, 8000));
+  while (thumbQueue.length && thumbsMade < THUMBS_PER_SESSION) {
     const path = thumbQueue.shift();
+    thumbsMade++;
+    await new Promise(r => setTimeout(r, 1500));
     try {
       const { data: blob, error } = await sb.storage.from(BUCKET).download(path);
       if (error || !blob) continue;
       const small = await compressImage(blob, 320, 0.72);
+      if (small === blob || small.size >= blob.size) continue;  // couldn't shrink it: don't store a big copy
       await sb.storage.from(BUCKET).upload(THUMB_DIR + path, small, { contentType: 'image/jpeg', cacheControl: '2592000' });
       // (someone else may have made it first — either way it exists now)
       const l = await signLinks([THUMB_DIR + path]);
