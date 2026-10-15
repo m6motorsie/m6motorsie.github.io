@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '98';
+const APP_VERSION = '99';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -68,6 +68,30 @@ const plate = v => clean(v).toUpperCase().replace(/\s+/g, ' ');
 const norm = v => String(v ?? '').toLowerCase().replace(/[\s-]/g, '');
 // Same plate whatever the spaces / dashes / case: "221-D-20541" = "221d20541"
 const plateKey = v => String(v ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+// Reading a plate: tidy it and tell the year it was first registered.
+//   Irish: YY[1|2]-CC-N  (since 2013 the digit after the year is the half: 1 = Jan–Jun, 2 = Jul–Dec)
+//   UK:    AA00 AAA      (the two digits: 24 = Mar 2024, 74 = Sep 2024)
+const IRISH_COUNTIES = new Set(['C', 'CE', 'CN', 'CW', 'D', 'DL', 'G', 'KE', 'KK', 'KY', 'L', 'LD', 'LH', 'LK', 'LM',
+  'LS', 'MH', 'MN', 'MO', 'OY', 'RN', 'SO', 'T', 'TN', 'TS', 'W', 'WD', 'WH', 'WX', 'WW']);
+function plateInfo(raw) {
+  const p = plateKey(raw);
+  let m = p.match(/^(\d{2})([12]?)([A-Z]{1,2})(\d{1,6})$/);
+  if (m && IRISH_COUNTIES.has(m[3])) {
+    const year = 2000 + Number(m[1]);
+    if (year > new Date().getFullYear() + 1) return null;
+    const half = m[2] ? (m[2] === '1' ? 'Jan–Jun' : 'Jul–Dec') : '';
+    return { kind: 'ie', text: `${m[1]}${m[2]}-${m[3]}-${m[4]}`, year, when: `${half ? `${half} ` : ''}${year}` };
+  }
+  m = p.match(/^([A-Z]{2})(\d{2})([A-Z]{3})$/);
+  if (m) {
+    const n = Number(m[2]);
+    if (!n) return null;
+    const year = 2000 + (n >= 50 ? n - 50 : n);
+    return { kind: 'uk', text: `${m[1]}${m[2]} ${m[3]}`, year, when: `${n >= 50 ? 'Sep' : 'Mar'} ${year}` };
+  }
+  return null;
+}
 
 // Another car (not delivered) already in the app with one of these plates
 function samePlateCar(regs, exceptId) {
@@ -1834,6 +1858,69 @@ function openSoldPicker() {
   sheet.querySelector('#pickSearch').focus();
 }
 
+// Makes already in the app, one spelling each (the most used: "BMW", not "Bmw")
+function bestSpellings(values) {
+  const by = new Map();
+  for (const raw of values) {
+    const v = clean(raw); if (!v) continue;
+    const k = v.toLowerCase();
+    if (!by.has(k)) by.set(k, new Map());
+    by.get(k).set(v, (by.get(k).get(v) ?? 0) + 1);
+  }
+  return [...by.values()].map(spell => [...spell.entries()].sort((a, b) => b[1] - a[1])[0][0]).sort((a, b) => a.localeCompare(b));
+}
+const knownMakes = () => bestSpellings([...S.vehicles.values()].map(x => x.make));
+const knownModels = make => bestSpellings([...S.vehicles.values()]
+  .filter(x => clean(x.make).toLowerCase() === clean(make).toLowerCase())
+  .map(x => clean(x.model).replace(/\s*\(\d{4}\)\s*$/, '')));  // without "(2022)"
+
+// Plates: tidy them, put a UK plate in the Import box (and an Irish one in the
+// Irish box), show the year, and refill make / model / colour from a past visit.
+function wirePlateHelpers(form, isNew) {
+  const f = form.elements, hint = $('#plateHint', form);
+  const showHint = () => {
+    const infos = [f.reg_ie.value, f.reg_imp.value].map(plateInfo).filter(Boolean);
+    const info = infos[0];
+    if (!info) { hint.innerHTML = 'At least one registration is required.'; return; }
+    const hasYear = /\(\d{4}\)|\b(19|20)\d{2}\b/.test(f.model.value);
+    hint.innerHTML = `${info.kind === 'ie' ? 'Irish' : 'UK'} plate · first registered <b>${esc(info.when)}</b>`
+      + (hasYear || !clean(f.model.value) ? '' : ` · <button type="button" class="link-btn" id="addYear">Add (${info.year}) to model</button>`);
+    $('#addYear', form)?.addEventListener('click', () => { f.model.value = `${clean(f.model.value)} (${info.year})`; showHint(); });
+  };
+  const tidy = () => {
+    for (const [here, there] of [['reg_ie', 'reg_imp'], ['reg_imp', 'reg_ie']]) {
+      const info = plateInfo(f[here].value);
+      if (!info) continue;
+      const belongs = info.kind === 'ie' ? 'reg_ie' : 'reg_imp';
+      if (belongs !== here && !clean(f[there].value)) { f[there].value = info.text; f[here].value = ''; }
+      else f[here].value = info.text;
+    }
+    // A car that's been here before (e.g. delivered and back): fill what's empty
+    if (isNew && !clean(f.make.value) && !clean(f.model.value)) {
+      const keys = [f.reg_ie.value, f.reg_imp.value].map(plateKey).filter(Boolean);
+      const before = [...S.vehicles.values()].find(x => [x.reg_ie, x.reg_imp].some(r => r && keys.includes(plateKey(r))));
+      if (before) {
+        f.make.value = before.make || '';
+        f.model.value = before.model || '';
+        if (!clean(f.color.value)) f.color.value = before.color || '';
+        f.color.dispatchEvent(new Event('input'));
+        toast('Filled in from when this car was here before');
+      }
+    }
+    showHint();
+  };
+  f.reg_ie.addEventListener('blur', tidy);
+  f.reg_imp.addEventListener('blur', tidy);
+  f.reg_ie.addEventListener('input', showHint);
+  f.reg_imp.addEventListener('input', showHint);
+  f.model.addEventListener('input', showHint);
+  const fillModels = () => { $('#modelList', form).innerHTML = knownModels(f.make.value).map(m => `<option value="${esc(m)}">`).join(''); };
+  f.make.addEventListener('input', fillModels);
+  f.make.addEventListener('change', fillModels);
+  fillModels();
+  showHint();
+}
+
 // Vehicle form. Modes:
 //   {}                          new stock vehicle
 //   { sold: true }              new sold vehicle (not from stock)
@@ -1870,10 +1957,12 @@ function openVehicleForm({ vehicle = null, sold = false, convert = false } = {})
       <label>Irish reg (IRL)<input name="reg_ie" class="plate-input" value="${esc(v.reg_ie)}" autocapitalize="characters" autocomplete="off"></label>
       <label>Import reg (IMP)<input name="reg_imp" class="plate-input" value="${esc(v.reg_imp)}" autocapitalize="characters" autocomplete="off"></label>
     </div>
-    <p class="hint">At least one registration is required.</p>
+    <p class="hint" id="plateHint">At least one registration is required.</p>
     <div class="grid2">
-      <label>Make<input name="make" value="${esc(v.make)}" autocapitalize="words"></label>
-      <label>Model<input name="model" value="${esc(v.model)}" autocapitalize="words"></label>
+      <label>Make<input name="make" value="${esc(v.make)}" autocapitalize="words" list="makeList" autocomplete="off"></label>
+      <label>Model<input name="model" value="${esc(v.model)}" autocapitalize="words" list="modelList" autocomplete="off"></label>
+      <datalist id="makeList">${knownMakes().map(m => `<option value="${esc(m)}">`).join('')}</datalist>
+      <datalist id="modelList"></datalist>
     </div>
     <label>Colour<input name="color" value="${esc(v.color)}" autocapitalize="words"></label>
     <div class="swatches" id="swatches">${COLOURS.map(([n, h]) => `<button type="button" class="swatch" data-colour="${n}"><span class="dot" style="background:${h}"></span>${n}</button>`).join('')}</div>
@@ -1912,6 +2001,7 @@ function openVehicleForm({ vehicle = null, sold = false, convert = false } = {})
   </form>`);
 
   const form = $('#vform', sheet);
+  wirePlateHelpers(form, isNew);
   const colourInput = form.elements.color;
   const markSwatch = () => $$('.swatch', form).forEach(b => b.classList.toggle('on', b.dataset.colour.toLowerCase() === clean(colourInput.value).toLowerCase()));
   markSwatch();
