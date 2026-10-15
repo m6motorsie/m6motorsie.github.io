@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '106';
+const APP_VERSION = '107';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1429,10 +1429,9 @@ async function cycleService(v, key, btn) {
   const patch = { [`${key}_state`]: next };
   // Tapping a service the car wasn't asked for adds it to the car and starts it
   if (!v.services.includes(key)) patch.services = SERVICES.map(s => s.key).filter(k => v.services.includes(k) || k === key);
-  // A finished Full Valet covers the First Clean: if nobody started it, the car
-  // no longer needs it (taken off the car's jobs — not counted for anyone, 036_*.sql)
-  const dropFirst = key === 'full' && next === 'done' && v.services.includes('first') && v.first_state === 'pending';
-  if (dropFirst) patch.services = (patch.services ?? v.services).filter(k => k !== 'first');
+  // A finished Full Valet covers the First Clean: if it isn't done, the database
+  // takes it off the car's jobs (not counted for anyone, 038_*.sql) — shown straight away here
+  const closesFirst = key === 'full' && next === 'done' && v.services.includes('first') && v.first_state !== 'done';
 
   // Optimistic update; the server fills in the real who/when.
   const before = { ...v };
@@ -1441,6 +1440,7 @@ async function cycleService(v, key, btn) {
     ...patch,
     [`${key}_by`]: next === 'pending' ? null : (v[`${key}_by`] ?? S.me.id),
     [`${key}_done_at`]: next === 'done' ? new Date().toISOString() : null,
+    ...(closesFirst ? { services: (patch.services ?? v.services).filter(k => k !== 'first'), first_state: 'pending', first_by: null } : {}),
   });
   renderAll();
   try {
@@ -2923,7 +2923,7 @@ const HELP = [
       <li><b>◐ Amber</b> — someone is working on it (shows their name).</li>
       <li><b>✓ Green</b> — done (shows who and when).</li>
       <li><b>Not needed on this car</b> — that job wasn’t asked for. Only a manager can add it (Edit).</li></ul>
-    <p><b>Tap ▶ when you start</b>, <b>tap again when you finish</b>. Finishing a Full Valet takes the First Clean off the car if nobody started it (it isn’t needed any more). The <b>In prep</b> tab shows the cars you are working on. The job goes in <b>your name</b> — that’s what counts for pay (Full Valet) and for your monthly counter, so always use your own login.</p>
+    <p><b>Tap ▶ when you start</b>, <b>tap again when you finish</b>. Finishing a Full Valet closes the First Clean if it isn’t done (the Full Valet covered it). The <b>In prep</b> tab shows the cars you are working on. The job goes in <b>your name</b> — that’s what counts for pay (Full Valet) and for your monthly counter, so always use your own login.</p>
     <p>Tapped by mistake on a green one? Tap it twice to undo.</p>
     <p>🔒 A job someone else started or finished is theirs: only they (or a manager) can change it.</p>` },
   { id: 'tabs', title: 'What the tabs mean', tabs: ['stock', 'in_prep', 'sold', 'delivered'], body: `
