@@ -699,3 +699,9 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 .dent-photo-edit .dp button { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border-radius: 50%; border: 0; background: rgba(0,0,0,.65); color: #fff; font-size: 12px; cursor: pointer; }
 .dent-photo-edit .dp.add { display: grid; place-items: center; align-content: center; gap: 2px; cursor: pointer; border-style: dashed; font-size: 20px; }
 .dent-photo-edit .dp.add small { font-size: 11px; color: var(--muted); }
+
+/* Sold-cars person: Start prep / Ready to go, full width where the job list was */
+.ready-big { display: flex; gap: 8px; }
+.ready-big .btn { flex: 1; min-height: 46px; font-size: 15px; font-weight: 700; }
+.ready-big .btn.ghost { flex: 0 0 auto; }
+.ready-waiting { font-size: 12.5px; color: var(--doing-fg); font-weight: 600; margin-bottom: -4px; }

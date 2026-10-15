@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '100';
+const APP_VERSION = '101';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -599,7 +599,7 @@ const workStage = v => (untouched(v) ? 0 : v.services.length && v.done_at ? 2 : 
 // The car is waiting for one of MY jobs (asked for on it and still to do)
 const needsMe = v => myServiceKeys().some(k => v.services.includes(k) && v[`${k}_state`] === 'pending');
 // In prep: you see the cars YOU are working on; managers and the sold-cars person see all
-const seesAllInPrep = () => isAdmin() || canReady();
+const seesAllInPrep = () => isAdmin();
 const workingOnIt = v => SERVICES.some(s => v[`${s.key}_state`] === 'doing' && v[`${s.key}_by`] === S.me?.id);
 const onTab = (v, tab) => (tab === 'dent' ? inDent(v) : tab === 'viewing' ? inViewing(v)
   : tab === 'in_prep' ? tabOf(v) === 'in_prep' && (seesAllInPrep() || workingOnIt(v)) : tabOf(v) === tab);
@@ -616,6 +616,9 @@ function renderTabs() {
   $('.tabs [data-tab=delivered]').hidden = !isAdmin();
   if (S.tab === 'delivered' && !isAdmin()) S.tab = 'sold';
   $('.tabs [data-tab=viewing]').hidden = !canSeeViewings();
+  const noPrepTab = !isAdmin() && !myServiceKeys().length;
+  $('.tabs [data-tab=in_prep]').hidden = noPrepTab;
+  if (S.tab === 'in_prep' && noPrepTab) S.tab = 'sold';
   if (S.tab === 'viewing' && !canSeeViewings()) S.tab = 'sold';
   for (const b of $$('.tabs button')) {
     b.setAttribute('aria-selected', b.dataset.tab === S.tab);
@@ -801,6 +804,16 @@ const canDent = () => !!S.me?.can_dent;
 const canFinishDent = () => (S.me && 'can_finish_dent' in S.me ? !!S.me.can_finish_dent : canDent());
 const canBodyshop = () => !!S.me?.can_bodyshop;
 const dueToday = v => isSold(v) && !!v.delivery_date && dayDiff(v.delivery_date) <= 0;
+
+// The sold-cars person who isn't a manager and has no jobs (Ryann): on sold cars
+// the job list (who did what) is replaced by their own buttons, full width,
+// plus a short line if a requested job isn't done yet.
+const soldPersonOnly = () => canReady() && !isAdmin() && !myServiceKeys().length;
+function readyBlockHTML(v) {
+  const waiting = SERVICES.filter(s => v.services.includes(s.key) && v[`${s.key}_state`] !== 'done').map(s => s.label);
+  return `${waiting.length && v.ready_state === 'pending' ? `<div class="ready-waiting">Waiting: ${esc(waiting.join(', '))}</div>` : ''}
+    <div class="ready-big">${readyButtons(v)}</div>`;
+}
 
 function readyButtons(v) {
   if (!canReady()) return '';
@@ -1046,7 +1059,7 @@ function cardHTML(v) {
     const ryannHasIt = canReady() && v.ready_state === 'done';  // readyButtons already shows Delivered
     const deliver = isAdmin() && !ryannHasIt && (dueToday(v) || v.ready_state === 'done')
       ? b('deliver', `${ICON.check} Delivered`, 'accent') : '';
-    actions = edit + body + dent + readyButtons(v) + deliver;
+    actions = edit + body + dent + (soldPersonOnly() ? '' : readyButtons(v)) + deliver;
   }
   else actions = edit + (isAdmin() ? b('loan', 'Loan') : '') + body + dent + (isAdmin() ? b('sell', 'Mark sold', 'primary') : '');
   const remove = isAdmin() && v.status !== 'delivered' ? `${b('remove', 'Delete', 'ghost danger')}<span class="spacer"></span>` : '';
@@ -1086,7 +1099,7 @@ function cardHTML(v) {
       .filter(s => !isExtra(v, s.key) || (isAdmin() && v.status !== 'delivered'))
       .map(s => serviceHTML(v, s.key)).join('')}</div>
     ${notNeededHTML(v)}
-    ${otherJobsHTML(v)}` : jobStatusHTML(v)}
+    ${otherJobsHTML(v)}` : sold && soldPersonOnly() ? readyBlockHTML(v) : jobStatusHTML(v)}
     ${sold ? readyStatusHTML(v) : ''}
     ${refreshStatusHTML(v)}
     <div class="card-actions">${remove}${actions}</div>
