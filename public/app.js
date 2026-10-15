@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '104';
+const APP_VERSION = '105';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -28,7 +28,8 @@ const SERVICE = Object.fromEntries([...SERVICES, ...RETIRED_SERVICES].map(s => [
 const NEXT_STATE = { pending: 'doing', doing: 'done', done: 'pending' };
 
 const COLOURS = [
-  ['White', '#ffffff'], ['Black', '#111111'], ['Grey', '#8a8f98'], ['Brooklyn Grey', '#8c949b'], ['Silver', '#c9ccd1'],
+  ['White', '#ffffff'], ['Black', '#111111'], ['Carbon Black', '#1c2230'], ['Grey', '#8a8f98'], ['Brooklyn Grey', '#8c949b'], ['Silver', '#c9ccd1'],
+  ['Navy', '#1f2f5c'], ['Gold', '#c8a24a'],
   ['Blue', '#2f5fd0'], ['Red', '#c9302c'], ['Green', '#2e8b57'], ['Beige', '#d8c8a8'],
   ['Brown', '#7a4e2d'], ['Orange', '#f08a24'], ['Yellow', '#f2c230'],
 ];
@@ -642,8 +643,8 @@ function renderTabs() {
   print.textContent = `🖨 Print ${TAB_TITLE[S.tab]?.toLowerCase()} list`;
   const fab = $('#fab');
   // Adding stock and recording sales are admin-only (also enforced in the database)
-  fab.hidden = !['stock', 'sold'].includes(S.tab) || !isAdmin();
-  fab.innerHTML = `${ICON.plus}<span>${S.tab === 'stock' ? 'New stock' : 'Sold'}</span>`;
+  fab.hidden = S.tab !== 'stock' || !isAdmin();
+  fab.innerHTML = `${ICON.plus}<span>New stock</span>`;
   $('#photosFab').hidden = S.tab !== 'stock' || !isAdmin();
 }
 
@@ -1894,37 +1895,6 @@ function printPhotoList(cars) {
   });
 }
 
-// "Sold" button: pick a stock car, or add one that was never in stock.
-function openSoldPicker() {
-  const sheet = openSheet(`${sheetHead('Which car was sold?')}
-    <input type="search" id="pickSearch" placeholder="Search stock by plate, make or model" autocomplete="off">
-    <div class="pick-list" id="pickList"></div>
-    <button type="button" class="btn block" id="pickNew">${ICON.plus} Car not in stock — add it</button>`);
-
-  const draw = () => {
-    const q = norm($('#pickSearch').value);
-    const cars = [...S.vehicles.values()]
-      .filter(v => v.status === 'stock')
-      .filter(v => !q || [v.reg_ie, v.reg_imp, v.make, v.model].some(f => norm(f).includes(q)))
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    $('#pickList').innerHTML = cars.length ? cars.map(v => {
-      const url = photoSrc(v.photo_path);
-      return `<button type="button" class="pick" data-id="${v.id}">
-        ${url ? `<img class="thumb" src="${esc(url)}" alt="">` : `<span class="thumb placeholder">${ICON.car}</span>`}
-        <span>${plateHTML(v)}<span class="muted">${esc(`${v.make} ${v.model}`.trim())}</span></span>
-      </button>`;
-    }).join('') : '<p class="empty">No stock vehicles match.</p>';
-  };
-  draw();
-  $('#pickSearch').addEventListener('input', draw);
-  $('#pickList').addEventListener('click', e => {
-    const id = e.target.closest('[data-id]')?.dataset.id;
-    if (id) openVehicleForm({ vehicle: S.vehicles.get(id), convert: true });
-  });
-  $('#pickNew').addEventListener('click', () => openVehicleForm({ sold: true }));
-  sheet.querySelector('#pickSearch').focus();
-}
-
 // Makes already in the app, one spelling each (the most used: "BMW", not "Bmw")
 function bestSpellings(values) {
   const by = new Map();
@@ -2994,7 +2964,7 @@ const HELP = [
     <p>The manager marks it <b>Ordered</b>, and <b>Got it</b> when it arrives. The manager can print the list.</p>` },
   { id: 'admin', title: 'Adding & selling cars (managers)', tabs: ['stock'], admin: true, body: `
     <p><b>+ New stock</b> (Stock tab): plate, make, model, colour, VRT / NCT, <b>the services the car needs</b> (or <b>All</b>) and Urgent / On site / Due in. Already sold? Tick <b>Already sold</b>. Scratches, scuffed wheels or missing parts? Tick them under <b>Issues on arrival</b>.</p>
-    <p><b>Mark sold</b> on a stock car, or <b>+ Sold</b> on the Deliveries tab: pick the delivery date and time.</p>
+    <p><b>Mark sold</b> on a stock car and pick the delivery date and time. A car that arrives already sold: <b>+ New stock</b> → <b>Already sold</b>.</p>
     <p>The <b>chart icon</b> is the pay report: Full Valet cars per person, for <b>this month</b> (or this / last week). Print it before using the 🗑 to clear someone’s records.</p>` },
   { id: 'phone', title: 'Phone tips', tabs: [], body: `
     <ul><li><b>iPhone:</b> Safari → Share → <b>Add to Home Screen</b>. Open it from the icon.</li>
@@ -3215,7 +3185,7 @@ function wireUi() {
   $('#photosFab').innerHTML = `${ICON.camera}<span>Photos</span>`;
   $('#photosFab').addEventListener('click', openPhotoPicker);
   $('#myCount').addEventListener('click', openMyMonth);
-  $('#fab').addEventListener('click', () => (S.tab === 'stock' ? openVehicleForm() : openSoldPicker()));
+  $('#fab').addEventListener('click', () => openVehicleForm());
   $('#list').addEventListener('click', onListClick);
 
   $('#teamBtn').addEventListener('click', () => canManageTeam() && setView('team'));
