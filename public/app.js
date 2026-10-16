@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '109';
+const APP_VERSION = '110';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -41,7 +41,7 @@ const COLOUR_HEX = Object.fromEntries(COLOURS.map(([n, h]) => [n.toLowerCase(), 
 
 // Tabs are views, not the database status (see tabOf): the DB status
 // 'in_prep' means "sold, not delivered yet".
-const TAB_TITLE = { viewing: 'Viewings', stock: 'Stock', in_prep: 'In prep', sold: 'Deliveries', bodyshop: 'Bodyshop', dent: 'Dent', loan: 'Loan', delivered: 'Delivered' };
+const TAB_TITLE = { viewing: 'Viewings', stock: 'Stock', in_prep: 'In prep', sold: 'Deliveries', bodyshop: 'Bodyshop', dent: 'Dent', loan: 'Loan', trade: 'Trade', delivered: 'Delivered' };
 
 const ICON = {
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
@@ -237,6 +237,9 @@ const S = {
   workLog: new Map(),       // vehicle id → work done, newest first (025_*.sql)
   workLogReady: false,
   online: new Set(),        // ids of people with the app open right now (presence)
+  trades: [],               // trade cars: part-exchanges sold on to the trade (041_*.sql)
+  tradeOffers: new Map(),   // trade id → offers, best first
+  tradeReady: false,
 };
 
 const configured = !SUPABASE_URL.includes('YOUR-') && !SUPABASE_ANON_KEY.includes('YOUR-');
@@ -284,7 +287,28 @@ async function loadAll() {
   S.me = S.profiles.get(S.session.user.id) ?? null;
   S.vehicles = new Map(v.data.map(x => [x.id, withJobs(x)]));
   S.syncedAt = syncMark();
-  await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMyMonth(), loadIssues(), loadWorkLog()]);
+  await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMyMonth(), loadIssues(), loadWorkLog(), loadTrades().then(refreshPhotoUrls)]);
+}
+
+// Trade cars (managers + sales only; others get nothing back). Finished ones
+// (collected and paid) stay 30 days. Loaded separately so the app still works
+// before 041_*.sql runs.
+async function loadTrades() {
+  if (!canTrade()) { S.tradeReady = false; S.trades = []; return; }
+  const since = new Date(Date.now() - 30 * 864e5).toISOString();
+  const [t, o] = await Promise.all([
+    sb.from('trade_cars').select('*').neq('status', 'retail')
+      .or(`paid_at.is.null,status.neq.collected,updated_at.gte.${since}`).order('created_at'),
+    sb.from('trade_offers').select('*').order('amount', { ascending: false }),
+  ]);
+  S.tradeReady = !t.error;
+  S.trades = t.data ?? [];
+  S.tradeOffers = new Map();
+  for (const x of o.data ?? []) {
+    if (!S.tradeOffers.has(x.trade_id)) S.tradeOffers.set(x.trade_id, []);
+    S.tradeOffers.get(x.trade_id).push(x);
+  }
+  for (const list of S.tradeOffers.values()) list.sort((a, b) => Number(b.amount) - Number(a.amount));  // best first
 }
 
 // Work done on cars, newest first. Loaded separately so the app still works
@@ -350,7 +374,8 @@ async function signLinks(paths) {
 }
 
 async function refreshPhotoUrls() {
-  const paths = [...new Set([...S.vehicles.values()].flatMap(v => [v.photo_path, ...(inDent(v) ? v.dent_photos ?? [] : [])]).filter(Boolean))]
+  const paths = [...new Set([...S.vehicles.values()].flatMap(v => [v.photo_path, ...(inDent(v) ? v.dent_photos ?? [] : [])])
+    .concat(S.trades.map(t => t.photo_path)).filter(Boolean))]
     .filter(p => !S.thumbUrls.has(p) && !S.noThumb.has(p));
   if (!paths.length) return;
   const thumbs = await signLinks(paths.map(p => THUMB_DIR + p));
@@ -444,6 +469,12 @@ function subscribe() {
       await loadIssues();
       renderAll();
       refreshIssueSheet();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'trade_cars' }, async () => {
+      await loadTrades(); await refreshPhotoUrls(); renderAll();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'trade_offers' }, async () => {
+      await loadTrades(); renderAll();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_work_log' }, async () => {
       await loadWorkLog();
@@ -641,6 +672,10 @@ function renderTabs() {
   $('.tabs [data-tab=in_prep]').hidden = noPrepTab;
   if (S.tab === 'in_prep' && noPrepTab) S.tab = 'sold';
   if (S.tab === 'viewing' && !canSeeViewings()) S.tab = 'sold';
+  const noTrade = !canTrade() || !S.tradeReady;
+  $('.tabs [data-tab=trade]').hidden = noTrade;
+  if (S.tab === 'trade' && noTrade) S.tab = 'sold';
+  counts.trade = S.trades.filter(tradeOpen).length;
   for (const b of $$('.tabs button')) {
     b.setAttribute('aria-selected', b.dataset.tab === S.tab);
     $('.count', b).textContent = counts[b.dataset.tab];
@@ -662,9 +697,9 @@ function renderTabs() {
   print.hidden = !isAdmin() || !['sold', 'dent'].includes(S.tab);
   print.textContent = `🖨 Print ${TAB_TITLE[S.tab]?.toLowerCase()} list`;
   const fab = $('#fab');
-  // Adding stock is admin-only (also enforced in the database)
-  fab.hidden = S.tab !== 'stock' || !isAdmin();
-  fab.innerHTML = `${ICON.plus}<span>New stock</span>`;
+  // Adding stock is admin-only (also enforced in the database); trade-ins: managers + sales
+  fab.hidden = !((S.tab === 'stock' && isAdmin()) || (S.tab === 'trade' && canTrade()));
+  fab.innerHTML = `${ICON.plus}<span>${S.tab === 'trade' ? 'Trade-in' : 'New stock'}</span>`;
   $('#photosFab').hidden = S.tab !== 'stock' || !isAdmin();
 }
 
@@ -1258,6 +1293,7 @@ function renderList() {
 // While searching, cars found in OTHER tabs are shown below too, under their
 // tab's name, so you don't have to go looking tab by tab.
 function listHTML(tab) {
+  if (tab === 'trade') return tradeHTML();
   const current = S.tab;
   try {
     S.tab = tab;
@@ -1269,7 +1305,7 @@ function listHTML(tab) {
 
     const shown = new Set(list.map(v => v.id));
     const elsewhere = $$('.tabs button:not([hidden])').map(b => b.dataset.tab)
-      .filter(t => t !== tab && t !== 'dent' && t !== 'viewing')  // lists only; their cars live in another tab
+      .filter(t => t !== tab && t !== 'dent' && t !== 'viewing' && t !== 'trade')  // lists only; their cars live in another tab
       .map(t => { S.tab = t; return [t, visibleVehicles().filter(v => !shown.has(v.id))]; })
       .filter(([, cars]) => cars.length);
     if (!here && !elsewhere.length) return '<p class="empty">No vehicles match your search.</p>';
@@ -1413,6 +1449,8 @@ async function onListClick(e) {
   }
   const btn = e.target.closest('[data-act]');
   if (!btn) return;
+  const tradeCard = btn.closest('[data-trade]');
+  if (tradeCard) return onTradeAction(btn, tradeCard.dataset.trade);
   const id = btn.closest('[data-id]')?.dataset.id;
   const v = S.vehicles.get(id);
   if (!v) return;
@@ -2449,6 +2487,300 @@ async function savePerson(id, input) {
 }
 
 // ---------------------------------------------------------------------
+// Trade: a customer's part-exchange that M6 doesn't keep for retail is sold on
+// to the trade (other dealers, garages, auctions). Alan decides at the deal;
+// the sales team logs the car, collects offers, accepts the best, and marks
+// it collected and paid. Prices: managers + sales only (041_*.sql).
+// ---------------------------------------------------------------------
+const canTrade = () => isAdmin() || canTestdrive();
+// Still needs something doing: on site, sold (to be collected) or not paid yet
+const tradeOpen = t => t.status === 'in' || t.status === 'sold' || (t.status === 'collected' && !t.paid_at);
+const euro = n => (n == null || n === '' ? '' : `€${Number(n).toLocaleString('en-IE', { maximumFractionDigits: 0 })}`);
+const tradeName = t => [t.make, t.model].map(clean).filter(Boolean).join(' ') || 'Unknown car';
+// A trade car's plate shown like the others (IRL or IMP band)
+const tradePlates = t => (clean(t.reg) ? plateHTML(plateInfo(t.reg)?.kind === 'uk' ? { reg_imp: t.reg } : { reg_ie: t.reg }) : '');
+const offersOf = t => S.tradeOffers.get(t.id) ?? [];
+const money = v => { const n = Number(String(v ?? '').replace(/[^\d.]/g, '')); return String(v ?? '').trim() && Number.isFinite(n) ? n : null; };
+
+function tradeCardHTML(t) {
+  const days = daysSince(t.created_at);
+  const chips = [];
+  if (t.status === 'in' || t.status === 'sold') chips.push(`<span class="chip${days >= 30 ? ' urgent' : days >= 14 ? ' warn' : ''}">${days === 0 ? 'In today' : `${days} ${days === 1 ? 'day' : 'days'} on site`}</span>`);
+  if (t.status === 'sold') chips.push(`<span class="chip ok">SOLD${t.buyer ? ` · ${esc(t.buyer)}` : ''}</span>`);
+  if (t.status === 'collected') chips.push(`<span class="chip">Collected ${esc(fmtDate(t.collected_at, false))}</span>`);
+  if (t.status !== 'in') chips.push(t.paid_at ? `<span class="chip ok">✓ PAID ${esc(fmtDate(t.paid_at, false))}</span>` : '<span class="chip warn">NOT PAID</span>');
+  const docs = [['V5', t.has_v5], ['2 keys', t.has_two_keys], ['Service history', t.has_history]]
+    .map(([l, ok]) => `<span class="trade-doc${ok ? ' ok' : ''}">${ok ? '✓' : '✗'} ${l}</span>`).join('');
+  const profit = t.sold_price != null && t.allowance != null ? Number(t.sold_price) - Number(t.allowance) : null;
+  const details = [
+    detailRow('Car', [t.year, t.mileage && `${t.mileage} km`, t.color].map(clean).filter(Boolean).join(' · ')),
+    detailRow('Part-ex on', t.part_ex_label),
+    detailRow('Allowance', euro(t.allowance)),
+    t.status !== 'in' ? detailRow('Sold to', t.buyer) : '',
+    t.status !== 'in' ? detailRow('Sold for', euro(t.sold_price), profit == null ? null
+      : `${esc(euro(t.sold_price))} <span class="trade-profit ${profit >= 0 ? 'up' : 'down'}">${profit >= 0 ? '+' : '−'}${esc(euro(Math.abs(profit)))} vs allowance</span>`) : '',
+    t.status === 'sold' ? detailRow('Collection', t.collect_date && dayName(t.collect_date)) : '',
+  ].join('');
+  const offers = offersOf(t);
+  const offersBox = t.status === 'in' && offers.length ? `<div class="trade-offers">
+    <div class="section-label">Offers (${offers.length})</div>
+    ${offers.map((o, i) => `<div class="trade-offer${i === 0 ? ' best' : ''}">
+      <span><strong>${esc(euro(o.amount))}</strong> · ${esc(o.buyer)}${i === 0 && offers.length > 1 ? ' <em>best</em>' : ''}
+        <small>${esc(nameOf(o.created_by))} · ${esc(ago(o.created_at))}${clean(o.note) ? ` · ${esc(o.note)}` : ''}</small></span>
+      <button type="button" class="btn small accent" data-act="taccept" data-offer="${o.id}">Accept</button>
+      ${isAdmin() || o.created_by === S.me?.id ? `<button type="button" class="btn small ghost danger" data-act="tofferdel" data-offer="${o.id}" aria-label="Remove offer">✕</button>` : ''}
+    </div>`).join('')}</div>` : '';
+  const b = (act, label, cls = 'ghost') => `<button class="btn small ${cls}" data-act="${act}">${label}</button>`;
+  const actions = [
+    isAdmin() ? `${b('tdelete', 'Delete', 'ghost danger')}<span class="spacer"></span>` : '',
+    b('tedit', 'Edit'),
+    t.status === 'in' && isAdmin() ? b('tretail', 'Keep for retail → Stock') : '',
+    t.status === 'in' ? b('toffer', '+ Offer', 'trade-btn') : '',
+    t.status === 'sold' ? b('tunsell', '↺ Not sold') + b('tcollected', `${ICON.check} Collected`, 'accent') : '',
+    t.status !== 'in' ? (t.paid_at ? b('tunpaid', '↺ Not paid') : b('tpaid', '€ Paid', 'sell-btn')) : '',
+  ].join('');
+  const url = photoSrc(t.photo_path);
+  return `<article class="card trade-card" data-trade="${t.id}">
+    <div class="card-head">
+      ${url ? `<img class="thumb" src="${esc(url)}" alt="" data-act="tphoto" loading="lazy">` : `<span class="thumb placeholder">${ICON.car}</span>`}
+      <div class="card-title">${tradePlates(t)}<div class="vehicle-name">${esc(tradeName(t))} ${colourHTML(t.color)}</div></div>
+    </div>
+    ${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}
+    ${details ? `<dl class="details">${details}</dl>` : ''}
+    <div class="trade-docs">${docs}</div>
+    ${clean(t.notes) ? `<div class="notes">${esc(t.notes)}</div>` : ''}
+    ${offersBox}
+    <div class="card-actions">${actions}</div>
+  </article>`;
+}
+
+function tradeHTML() {
+  if (!S.tradeReady) return '<p class="empty">Trade isn’t set up yet (run 041_trade_cars.sql in Supabase).</p>';
+  const q = norm(S.search);
+  const list = S.trades.filter(t => !q || [t.reg, t.make, t.model, t.buyer, t.part_ex_label].some(f => norm(f).includes(q)));
+  const onSite = list.filter(t => t.status === 'in' || t.status === 'sold');
+  const tied = onSite.reduce((n, t) => n + Number(t.allowance ?? 0), 0);
+  const unpaid = list.filter(t => t.status !== 'in' && !t.paid_at);
+  const owed = unpaid.reduce((n, t) => n + Number(t.sold_price ?? 0), 0);
+  const groups = [
+    ['To sell', list.filter(t => t.status === 'in')],
+    ['Sold — to be collected', list.filter(t => t.status === 'sold')],
+    ['Collected — waiting for payment', list.filter(t => t.status === 'collected' && !t.paid_at)],
+    ['Done (last 30 days)', list.filter(t => t.status === 'collected' && t.paid_at)],
+  ].filter(([, items]) => items.length);
+  const summary = `<p class="viewing-stats">🔁 <strong>${onSite.length}</strong> on site${tied ? ` · <strong>${esc(euro(tied))}</strong> given in part-ex` : ''}${unpaid.length ? ` · <strong>${esc(euro(owed))}</strong> still to be paid` : ''}</p>`;
+  if (!groups.length) return summary + `<p class="empty">${q ? 'No trade cars match your search.' : 'No trade cars. When a part-ex isn’t kept for retail, tap “+ Trade-in”.'}</p>`;
+  return summary + groups.map(([title, items]) => `<section class="deliv-group">
+    <h3>${esc(title)} <span class="count">${items.length}</span></h3>
+    ${items.map(tradeCardHTML).join('')}
+  </section>`).join('');
+}
+
+async function saveTrade(id, patch) {
+  const { data, error } = await sb.from('trade_cars').update(patch).eq('id', id).select().single();
+  if (error) throw error;
+  await loadTrades();
+  renderAll();
+  return data;
+}
+
+async function onTradeAction(btn, id) {
+  const t = S.trades.find(x => x.id === id);
+  if (!t || !canTrade()) return;
+  const act = btn.dataset.act;
+  try {
+    if (act === 'tphoto') {
+      const url = await fullPhotoUrl(t.photo_path);
+      if (url) openSheet(`${sheetHead(tradeName(t))}<img class="photo-full" src="${esc(url)}" alt="">`);
+    } else if (act === 'tedit') openTradeForm(t);
+    else if (act === 'toffer') openOfferForm(t);
+    else if (act === 'taccept') {
+      const o = offersOf(t).find(x => String(x.id) === btn.dataset.offer);
+      if (!o || !confirmTap(btn, `Sell for ${euro(o.amount)}?`)) return;
+      await saveTrade(t.id, { status: 'sold', buyer: o.buyer, sold_price: o.amount });
+      toast(`Sold to ${o.buyer} for ${euro(o.amount)}`);
+    } else if (act === 'tofferdel') {
+      if (!confirmTap(btn, 'Remove?')) return;
+      const { error } = await sb.from('trade_offers').delete().eq('id', Number(btn.dataset.offer));
+      if (error) throw error;
+      await loadTrades(); renderAll();
+    } else if (act === 'tunsell') {
+      if (!confirmTap(btn, 'Back to “to sell”?')) return;
+      await saveTrade(t.id, { status: 'in', buyer: '', sold_price: null, collect_date: null, paid_at: null });
+    } else if (act === 'tcollected') {
+      await saveTrade(t.id, { status: 'collected' });
+      toast(t.paid_at ? 'Collected — all done' : 'Collected — waiting for payment');
+    } else if (act === 'tpaid') {
+      await saveTrade(t.id, { paid_at: new Date().toISOString() });
+      toast('Marked as paid');
+    } else if (act === 'tunpaid') {
+      if (!confirmTap(btn, 'Not paid?')) return;
+      await saveTrade(t.id, { paid_at: null });
+    } else if (act === 'tretail') {
+      if (!isAdmin() || !confirmTap(btn, 'Move to Stock? Tap again')) return;
+      await tradeToRetail(t);
+    } else if (act === 'tdelete') {
+      if (!isAdmin() || !confirmTap(btn, 'Tap again to delete')) return;
+      const { error } = await sb.from('trade_cars').delete().eq('id', t.id);
+      if (error) throw error;
+      await removePhotos([t.photo_path]);
+      await loadTrades(); renderAll();
+      toast('Trade car deleted');
+    }
+  } catch (err) { toast(errorText(err), { error: true }); }
+}
+
+// Alan changed his mind: keep it for retail — it goes into Stock (First Clean +
+// Full Valet to start with; Edit to change), with its photo.
+async function tradeToRetail(t) {
+  const uk = plateInfo(t.reg)?.kind === 'uk';
+  const row = {
+    reg_ie: uk ? null : plate(t.reg) || null, reg_imp: uk ? plate(t.reg) : null,
+    make: clean(t.make), model: clean(t.model), color: clean(t.color),
+    notes: [clean(t.year) && `Year ${clean(t.year)}`, clean(t.mileage) && `${clean(t.mileage)} km`, 'From part-ex', clean(t.notes)].filter(Boolean).join(' · '),
+    services: ['first', 'full'], status: 'stock', stock_status: 'in_stock', photo_path: t.photo_path || null,
+  };
+  if (!row.reg_ie && !row.reg_imp) throw new Error('Add the registration first (Edit).');
+  const { data, error } = await sb.from('vehicles').insert(row).select().single();
+  if (error) throw error;
+  upsertLocal(data);
+  await saveTrade(t.id, { status: 'retail', photo_path: null });  // the photo now belongs to the stock car
+  toast('Moved to Stock — tap Edit there to change its jobs', { action: { label: 'Show', run: () => followCard(data.id, tabOf(data)) } });
+}
+
+function openTradeForm(t = null) {
+  const v = t ?? {};
+  const isNew = !t;
+  const deals = [...S.vehicles.values()].filter(x => isSold(x) || (x.status === 'delivered' && daysSince(x.delivered_at) < 30))
+    .sort((a, b) => new Date(b.sold_at ?? 0) - new Date(a.sold_at ?? 0));
+  const dealLabel = x => `${carName(x)} · ${plateText(x)}${x.seller ? ` (${x.seller})` : ''}`;
+  let newFile = null, previewUrl = null;
+  const sheet = openSheet(`<form class="form" id="tradeForm" novalidate>
+    ${sheetHead(isNew ? 'New trade-in' : 'Trade car')}
+    <p class="hint" style="margin:0">A part-ex that M6 sells on to the trade (other dealers, garages, auctions). Only managers and sales see this.</p>
+    <div class="photo-field">
+      <div class="photo-preview" id="tPreview">${photoSrc(v.photo_path) ? `<img src="${esc(photoSrc(v.photo_path))}" alt="">` : ICON.camera}</div>
+      <div class="photo-buttons"><label class="btn small">${v.photo_path ? 'Change photo' : 'Add photo'}<input type="file" accept="image/*" id="tPhoto" hidden></label></div>
+    </div>
+    <label>Registration<input name="reg" class="plate-input" value="${esc(v.reg)}" autocapitalize="characters" autocomplete="off"></label>
+    <div class="grid2">
+      <label>Make<input name="make" value="${esc(v.make)}" autocapitalize="words" list="makeList" autocomplete="off"></label>
+      <label>Model<input name="model" value="${esc(v.model)}" autocapitalize="words" autocomplete="off"></label>
+      <datalist id="makeList">${knownMakes().map(m => `<option value="${esc(m)}">`).join('')}</datalist>
+    </div>
+    <div class="grid2">
+      <label>Year<input name="year" value="${esc(v.year)}" inputmode="numeric" placeholder="e.g. 2016"></label>
+      <label>Mileage (km)<input name="mileage" value="${esc(v.mileage)}" inputmode="numeric" placeholder="e.g. 185,000"></label>
+    </div>
+    <label>Colour<input name="color" value="${esc(v.color)}" autocapitalize="words"></label>
+    <label>Part-ex on (the car the customer bought)<select name="part_ex_for">
+      <option value="">—</option>
+      ${deals.map(x => `<option value="${x.id}" ${x.id === v.part_ex_for ? 'selected' : ''}>${esc(dealLabel(x))}</option>`).join('')}
+      ${v.part_ex_for && !deals.some(x => x.id === v.part_ex_for) ? `<option value="${v.part_ex_for}" selected>${esc(v.part_ex_label)}</option>` : ''}
+    </select></label>
+    <label>Allowance — what the customer was given (€)<input name="allowance" value="${esc(v.allowance ?? '')}" inputmode="decimal" placeholder="e.g. 3500"></label>
+    <div class="section-label">Papers</div>
+    <div class="pills">
+      <label class="pill"><input type="checkbox" name="has_v5" ${v.has_v5 ? 'checked' : ''}><span>V5 / logbook</span></label>
+      <label class="pill"><input type="checkbox" name="has_two_keys" ${v.has_two_keys ? 'checked' : ''}><span>2 keys</span></label>
+      <label class="pill"><input type="checkbox" name="has_history" ${v.has_history ? 'checked' : ''}><span>Service history</span></label>
+    </div>
+    ${!isNew && t.status !== 'in' ? `<div class="section-label">Sale</div>
+    <div class="grid2">
+      <label>Buyer<input name="buyer" value="${esc(v.buyer)}" autocapitalize="words"></label>
+      <label>Sold for (€)<input name="sold_price" value="${esc(v.sold_price ?? '')}" inputmode="decimal"></label>
+    </div>
+    <label>Collection day<input type="date" name="collect_date" value="${esc(v.collect_date ?? '')}"></label>` : ''}
+    <label>Notes<textarea name="notes" rows="2" placeholder="condition, faults, anything the buyer should know">${esc(v.notes)}</textarea></label>
+    <p class="form-error" id="tradeError" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">${isNew ? 'Add trade car' : 'Save'}</button>
+    </div>
+  </form>`);
+  const form = $('#tradeForm', sheet);
+  $('#tPhoto', form).addEventListener('change', e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    newFile = file;
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = URL.createObjectURL(file);
+    $('#tPreview', form).innerHTML = `<img src="${previewUrl}" alt="">`;
+  });
+  form.elements.reg.addEventListener('blur', () => { const i = plateInfo(form.elements.reg.value); if (i) form.elements.reg.value = i.text; });
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const f = form.elements;
+    const fail = msg => { const el = $('#tradeError', form); el.textContent = msg; el.hidden = false; };
+    const deal = deals.find(x => x.id === f.part_ex_for.value);
+    const row = {
+      reg: plate(f.reg.value), make: clean(f.make.value), model: clean(f.model.value),
+      year: clean(f.year.value), mileage: clean(f.mileage.value), color: clean(f.color.value),
+      part_ex_for: f.part_ex_for.value || null,
+      part_ex_label: deal ? dealLabel(deal) : f.part_ex_for.value ? v.part_ex_label : '',
+      allowance: money(f.allowance.value),
+      has_v5: f.has_v5.checked, has_two_keys: f.has_two_keys.checked, has_history: f.has_history.checked,
+      notes: clean(f.notes.value),
+    };
+    if (f.buyer) Object.assign(row, { buyer: clean(f.buyer.value), sold_price: money(f.sold_price.value), collect_date: f.collect_date.value || null });
+    if (!row.reg && !row.make) return fail('Enter the registration or the make.');
+    const btn = form.querySelector('[type=submit]');
+    btn.disabled = true;
+    let uploaded = null;
+    try {
+      if (newFile) uploaded = row.photo_path = await uploadPhoto(newFile);
+      const { error } = isNew ? await sb.from('trade_cars').insert(row) : await sb.from('trade_cars').update(row).eq('id', t.id);
+      if (error) throw error;
+      if (uploaded && v.photo_path) await removePhotos([v.photo_path]);
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      await loadTrades();
+      await refreshPhotoUrls();
+      closeSheet();
+      if (S.tab !== 'trade') switchTab('trade'); else renderAll();
+      toast(isNew ? 'Trade car added' : 'Saved');
+    } catch (err) {
+      if (uploaded) await removePhotos([uploaded]);
+      btn.disabled = false;
+      fail(errorText(err));
+    }
+  };
+}
+
+function openOfferForm(t) {
+  // Buyers already used, so the same garages are one tap away
+  const buyers = [...new Set([...S.tradeOffers.values()].flat().map(o => clean(o.buyer)).concat(S.trades.map(x => clean(x.buyer))).filter(Boolean))].sort();
+  const best = offersOf(t)[0];
+  const sheet = openSheet(`<form class="form" id="offerForm" novalidate>
+    ${sheetHead('New offer')}
+    <div class="hold-car">${tradePlates(t)}<span class="muted">${esc(tradeName(t))}${t.allowance != null ? ` · allowance ${esc(euro(t.allowance))}` : ''}${best ? ` · best so far ${esc(euro(best.amount))}` : ''}</span></div>
+    <label>Buyer (garage, dealer or person)<input name="buyer" list="buyerList" autocapitalize="words" autocomplete="off" required></label>
+    <datalist id="buyerList">${buyers.map(x => `<option value="${esc(x)}">`).join('')}</datalist>
+    <label>Offer (€)<input name="amount" inputmode="decimal" placeholder="e.g. 4200" required></label>
+    <label>Note (optional)<input name="note" placeholder="e.g. collects Friday, cash"></label>
+    <p class="form-error" id="offerError" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Add offer</button>
+    </div>
+  </form>`);
+  const form = $('#offerForm', sheet);
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const f = form.elements;
+    const fail = msg => { const el = $('#offerError', form); el.textContent = msg; el.hidden = false; };
+    const buyer = clean(f.buyer.value), amount = money(f.amount.value);
+    if (!buyer) return fail('Who made the offer?');
+    if (amount == null) return fail('Enter the amount.');
+    const { error } = await sb.from('trade_offers').insert({ trade_id: t.id, buyer, amount, note: clean(f.note.value) });
+    if (error) return fail(errorText(error));
+    await loadTrades();
+    closeSheet();
+    renderAll();
+    toast(`Offer added: ${euro(amount)} from ${buyer}`);
+  };
+}
+
+// ---------------------------------------------------------------------
 // Overview (managers): the whole company at a glance — what's in stock and
 // sold, what goes out today, viewings, cars out of the building, what needs
 // attention, how old the stock is and who is working on what right now.
@@ -2499,6 +2831,8 @@ function renderOverview() {
     tile(where('loan').length, 'On loan', 'loan', { sub: lateOut('loan') ? `${lateOut('loan')} overdue` : '' }),
     tile(live.filter(inDent).length, 'On the dent list', 'dent'),
     tile(issues, 'Open issues', '', { cls: issues ? 'warn' : '' }),
+    ...(canTrade() && S.tradeReady ? [tile(S.trades.filter(t => t.status === 'in' || t.status === 'sold').length, 'Trade cars on site', 'trade',
+      { sub: S.trades.some(t => t.status !== 'in' && !t.paid_at) ? `${S.trades.filter(t => t.status !== 'in' && t.status !== 'retail' && !t.paid_at).length} not paid` : '' })] : []),
   ].join('');
 
   // This month
@@ -2522,9 +2856,17 @@ function renderOverview() {
   for (const v of where('loan')) if (v.loan_due && dayDiff(v.loan_due) < 0) att.push([2, v, 'loan', `Loan overdue — was due ${dayName(v.loan_due)}`]);
   for (const v of where('bodyshop')) if (v.body_due && dayDiff(v.body_due) < 0) att.push([2, v, 'bodyshop', `Bodyshop overdue — was due ${dayName(v.body_due)}`]);
   for (const v of stock) if (daysSince(v.created_at) >= 60) att.push([3, v, tabOf(v), `In stock ${daysSince(v.created_at)} days`]);
+  if (canTrade()) {
+    // Trade cars: shown with their own plate; tapping opens the Trade tab
+    const asCar = t => ({ id: null, make: t.make, model: t.model, reg_ie: t.reg });
+    for (const t of S.trades) {
+      if (t.status === 'in' && daysSince(t.created_at) >= 14) att.push([2, asCar(t), 'trade', `Trade car on site ${daysSince(t.created_at)} days`]);
+      if (t.status === 'collected' && !t.paid_at) att.push([1, asCar(t), 'trade', `Trade car collected, not paid — ${t.buyer || 'buyer?'}`]);
+    }
+  }
   att.sort((a, b) => a[0] - b[0]);
   const shown = att.slice(0, 10);
-  const attention = shown.length ? `<div class="ov-list">${shown.map(([lvl, v, tab, text]) => `<button type="button" class="ov-line lvl${lvl}" data-ov-tab="${tab}" data-ov-car="${v.id}">
+  const attention = shown.length ? `<div class="ov-list">${shown.map(([lvl, v, tab, text]) => `<button type="button" class="ov-line lvl${lvl}" data-ov-tab="${tab}"${v.id ? ` data-ov-car="${v.id}"` : ''}>
       <span class="ov-dot"></span><span><strong>${esc(text)}</strong><small>${esc(carName(v))} · ${esc(plateText(v))}</small></span><span class="person-chevron">›</span>
     </button>`).join('')}${att.length > shown.length ? `<p class="muted">…and ${att.length - shown.length} more</p>` : ''}</div>`
     : '<p class="muted">Nothing overdue or at risk right now. 👍</p>';
@@ -3164,6 +3506,14 @@ const HELP = [
     <p><b>+ New stock</b> (Stock tab): plate, make, model, colour, VRT / NCT, <b>the services the car needs</b> (or <b>All</b>) and Urgent / On site / Due in. Already sold? Tick <b>Already sold</b>. Scratches, scuffed wheels or missing parts? Tick them under <b>Issues on arrival</b>.</p>
     <p><b>Mark sold</b> on a stock car and pick the delivery date and time. A car that arrives already sold: <b>+ New stock</b> → <b>Already sold</b>.</p>
     <p>The <b>chart icon</b> is the pay report: Full Valet cars per person, for <b>this month</b> (or this / last week). Print it before using the 🗑 to clear someone’s records.</p>` },
+  { id: 'trade', title: 'Trade cars (sales)', tabs: ['trade'], body: `
+    <p>A customer’s part-ex that M6 doesn’t keep for retail is sold on to the trade. The manager decides at the deal.</p>
+    <ul><li><b>+ Trade-in</b> (Trade tab): plate, car, year, mileage, the deal it came in on, the <b>allowance</b> (what the customer was given), papers (V5, 2 keys, service history) and a photo.</li>
+      <li><b>+ Offer</b> for every offer from a garage or dealer — the best is on top. <b>Accept</b> sells it.</li>
+      <li>Then <b>Collected</b> when they take it and <b>€ Paid</b> when the money is in.</li>
+      <li>The card shows days on site (amber after 14, red after 30) and the result against the allowance.</li>
+      <li>Changed your mind? A manager taps <b>Keep for retail → Stock</b>.</li></ul>
+    <p>Only managers and the sales team see the Trade tab — it has prices.</p>` },
   { id: 'overview', title: 'Overview (managers)', tabs: [], admin: true, body: `
     <p>The <b>four-squares icon</b> at the top opens the Overview: the whole company at a glance — stock, sold cars, what goes out today, viewings, cars at the bodyshop or on loan, what needs attention, how old the stock is and who is working on what right now.</p>
     <p>Everything is live from the app. Tap any number or line to open that list.</p>` },
@@ -3395,7 +3745,7 @@ function wireUi() {
   $('#photosFab').innerHTML = `${ICON.camera}<span>Photos</span>`;
   $('#photosFab').addEventListener('click', openPhotoPicker);
   $('#myCount').addEventListener('click', openMyMonth);
-  $('#fab').addEventListener('click', () => openVehicleForm());
+  $('#fab').addEventListener('click', () => (S.tab === 'trade' ? openTradeForm() : openVehicleForm()));
   $('#list').addEventListener('click', onListClick);
 
   $('#teamBtn').addEventListener('click', () => canManageTeam() && setView('team'));
@@ -3516,7 +3866,7 @@ async function loadChanges() {
   S.profiles = new Map(p.data.map(x => [x.id, x]));
   S.me = S.profiles.get(S.session.user.id) ?? S.me;
   S.syncedAt = mark;
-  await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMyMonth(), loadIssues(), loadWorkLog()]);
+  await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMyMonth(), loadIssues(), loadWorkLog(), loadTrades().then(refreshPhotoUrls)]);
 }
 
 async function refreshData() {

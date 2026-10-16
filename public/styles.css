@@ -764,3 +764,18 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 .ov-fill.age2 { background: #f97316; } .ov-fill.age3 { background: #dc2626; }
 .ov-work { display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; }
 .ov-work .ring { margin-top: 4px; flex: none; }
+
+/* Trade cars */
+.trade-docs { display: flex; flex-wrap: wrap; gap: 6px; }
+.trade-doc { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: #dc2626; }
+.trade-doc.ok { color: var(--done-fg); }
+.trade-profit { font-size: 12px; font-weight: 700; margin-left: 6px; }
+.trade-profit.up { color: #16a34a; } .trade-profit.down { color: #dc2626; }
+.trade-offers { display: grid; gap: 6px; }
+.trade-offer { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+.trade-offer > span { flex: 1; font-size: 13.5px; }
+.trade-offer small { display: block; color: var(--muted); font-size: 12px; }
+.trade-offer em { font-style: normal; font-size: 11px; font-weight: 700; color: #16a34a; text-transform: uppercase; }
+.trade-offer.best { border-color: #16a34a; }
+.btn.trade-btn { border-color: #0e7490; color: #0e7490; }
+@media (prefers-color-scheme: dark) { .btn.trade-btn { color: #67d3e6; } }
