@@ -725,3 +725,9 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
   .btn.testdrive-btn:not(.on) { border-color: #be185d; color: #f472b6; }
   .btn.viewing-btn:not(.on) { border-color: #0e7490; color: #67d3e6; }
 }
+
+/* Viewings: the week / month count on top, and "Clear past" on Today */
+.viewing-stats { margin: 0 2px 4px; font-size: 13px; color: var(--muted); }
+.viewing-stats strong { color: var(--text); }
+.deliv-group h3 .clear-past { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 700; color: #0e7490; text-decoration: none; }
+@media (prefers-color-scheme: dark) { .deliv-group h3 .clear-past { color: #67d3e6; } }

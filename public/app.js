@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '107';
+const APP_VERSION = '108';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -16,6 +16,8 @@ const SERVICES = [
   { key: 'first',      label: 'First Clean / Tar Remove' },
   { key: 'polish',     label: 'Polish / Compound' },
   { key: 'full',       label: 'Full Valet' },
+  // Asked for by a manager on the cars that get one (not part of "All"); Dmytro does it (040_*.sql)
+  { key: 'bodykit',    label: 'Body kit', optional: true },
 ];
 // No longer offered as job bubbles (the Bodyshop tab and the work log took
 // them over); kept only to name old records.
@@ -24,6 +26,8 @@ const RETIRED_SERVICES = [
   { key: 'windscreen', label: 'Windscreen' },
   { key: 'repair',     label: 'Repair / Body Shop' },
 ];
+// The washing / valet jobs ("All" in the car form)
+const CLEANING = SERVICES.filter(s => !s.optional);
 const SERVICE = Object.fromEntries([...SERVICES, ...RETIRED_SERVICES].map(s => [s.key, s]));
 const NEXT_STATE = { pending: 'doing', doing: 'done', done: 'pending' };
 
@@ -276,7 +280,7 @@ async function loadAll() {
 
   S.profiles = new Map(p.data.map(x => [x.id, x]));
   S.me = S.profiles.get(S.session.user.id) ?? null;
-  S.vehicles = new Map(v.data.map(x => [x.id, x]));
+  S.vehicles = new Map(v.data.map(x => [x.id, withJobs(x)]));
   S.syncedAt = syncMark();
   await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMyMonth(), loadIssues(), loadWorkLog()]);
 }
@@ -400,8 +404,14 @@ async function runThumbs() {
   renderAll();
 }
 
+// A job column a row doesn't have reads as "to do"
+function withJobs(row) {
+  for (const s of SERVICES) row[`${s.key}_state`] ??= 'pending';
+  return row;
+}
+
 function upsertLocal(row) {
-  S.vehicles.set(row.id, row);
+  S.vehicles.set(row.id, withJobs(row));
 }
 
 let renderQueued = false;
@@ -553,8 +563,13 @@ function renderAll() {
 // stays in its own tab and also appears on the Dent list.
 const isWorking = v => SERVICES.some(s => v.services.includes(s.key) && v[`${s.key}_state`] === 'doing');
 const inDent = v => !!v.dent_since && v.status !== 'delivered';
-// Viewings is a list too (like Dent): the car stays in its own tab as well
-const inViewing = v => !!v.viewing_at && v.status !== 'delivered';
+// Viewings is a list too (like Dent): the car stays in its own tab as well.
+// Only today's and later ones: past days come off by themselves at midnight
+// (and go on the car's work log, 039_*.sql). Ones just marked done are hidden
+// while their Undo is offered.
+const viewingsGoing = new Set();
+const inViewing = v => !!v.viewing_at && v.status !== 'delivered' && !viewingsGoing.has(v.id)
+  && dayDiff(inputDate(new Date(v.viewing_at))) >= 0;
 const needsRefresh = v => inViewing(v) && v.refresh_state !== 'done';
 const canRefresh = () => !!S.me?.does_refresh;
 // The Viewings tab: the refresh team + the sales team (Glenio, Yann, Alan, Eanna, Derek)
@@ -759,7 +774,8 @@ function issuesHTML(v) {
 // My jobs this car doesn't need (staff can't add them): a quiet line instead of a button
 function notNeededHTML(v) {
   if (isAdmin() || v.status === 'delivered') return '';
-  const skip = myServiceKeys().filter(k => SERVICE[k] && isExtra(v, k)).map(k => SERVICE[k].label);
+  // (a job only some cars get, like Body kit, isn't worth a line on every other car)
+  const skip = myServiceKeys().filter(k => SERVICE[k] && !SERVICE[k].optional && isExtra(v, k)).map(k => SERVICE[k].label);
   return skip.length ? `<div class="other-jobs">Not needed on this car: ${esc(skip.join(', '))}</div>` : '';
 }
 
@@ -934,17 +950,46 @@ function openViewingForm(v) {
       fail(errorText(err));
     }
   };
-  $('#viewClear', form)?.addEventListener('click', async e => {
+  $('#viewClear', form)?.addEventListener('click', e => {
     if (!confirmTap(e.currentTarget, 'Tap again — viewing done')) return;
-    const undo = { viewing_at: v.viewing_at, viewing_note: v.viewing_note };
-    try {
-      await updateVehicle(v.id, { viewing_at: null });
-      closeSheet();
-      renderAll();
-      toast('Viewing done — taken off the list', { action: { label: 'Undo', run: async () => { await updateVehicle(v.id, undo); renderAll(); } } });
-    } catch (err) { fail(errorText(err)); }
-    function fail(msg) { const el = $('#viewError', form); el.textContent = msg; el.hidden = false; }
+    closeSheet();
+    viewingsDone([v]);
   });
+}
+
+// Viewing(s) done: off the list straight away; saved once the Undo is gone
+// (so an Undo doesn't book the viewing again or tell the refresh team twice).
+function viewingsDone(cars) {
+  cars.forEach(v => viewingsGoing.add(v.id));
+  renderAll();
+  let undone = false;
+  const save = setTimeout(async () => {
+    if (undone) return;
+    for (const v of cars) {
+      try { await updateVehicle(v.id, { viewing_at: null }); } catch (err) { toast(errorText(err), { error: true }); }
+      viewingsGoing.delete(v.id);
+    }
+    await loadWorkLog();
+    renderAll();
+  }, 6500);
+  toast(cars.length === 1 ? 'Viewing done — saved on the car’s log' : `${cars.length} viewings cleared — saved on the cars’ logs`, {
+    action: { label: 'Undo', run: () => { undone = true; clearTimeout(save); cars.forEach(v => viewingsGoing.delete(v.id)); renderAll(); } },
+  });
+}
+
+// Today's viewings whose time has passed (the "Clear past" button)
+const pastViewingsToday = () => [...S.vehicles.values()]
+  .filter(v => inViewing(v) && dayDiff(inputDate(new Date(v.viewing_at))) === 0 && new Date(v.viewing_at) < new Date());
+
+// "👀 5 viewings this week · 18 this month": the work log (done ones) + the ones booked
+function viewingStatsHTML() {
+  if (!S.workLogReady) return '';
+  const times = [];
+  for (const log of S.workLog.values()) for (const w of log) if (w.note.startsWith('👀 Viewing')) times.push(new Date(w.created_at));
+  for (const v of S.vehicles.values()) if (inViewing(v)) times.push(new Date(v.viewing_at));
+  const count = preset => { const [a, b] = presetRange(preset); return times.filter(t => t >= a && t < b).length; };
+  const week = count('this-week'), month = count('this-month');
+  return `<p class="viewing-stats">👀 <strong>${week}</strong> ${week === 1 ? 'viewing' : 'viewings'} this week · <strong>${month}</strong> this month</p>`;
 }
 
 // Viewings tab: cards under day headings, earliest first
@@ -952,7 +997,6 @@ function viewingGroup(v) {
   const day = inputDate(new Date(v.viewing_at));
   const diff = dayDiff(day);
   const long = new Date(`${day}T00:00`).toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'short' });
-  if (diff < 0) return { key: 'past', title: 'Earlier — clear when done', cls: 'overdue' };
   if (diff === 0) return { key: 'today', title: `Today — ${long}`, cls: 'today' };
   if (diff === 1) return { key: 'tomorrow', title: `Tomorrow — ${long}`, cls: '' };
   return { key: day, title: long, cls: '' };
@@ -965,8 +1009,10 @@ function viewingHTML(list) {
     if (!groups.has(g.key)) groups.set(g.key, { ...g, items: [] });
     groups.get(g.key).items.push(v);
   }
+  const past = canTestdrive() ? pastViewingsToday().length : 0;
   return [...groups.values()].map(g => `<section class="deliv-group ${g.cls}">
-    <h3>${esc(g.title)} <span class="count">${g.items.length}</span></h3>
+    <h3>${esc(g.title)} <span class="count">${g.items.length}</span>
+      ${g.key === 'today' && past ? `<button type="button" class="link-btn clear-past" data-clear-viewings>✓ Clear past (${past})</button>` : ''}</h3>
     ${g.items.map(cardHTML).join('')}
   </section>`).join('');
 }
@@ -1040,6 +1086,7 @@ function cardHTML(v) {
     tab === 'bodyshop' ? detailRow('Work', v.body_notes) : '',
     tab === 'bodyshop' ? detailRow('Bodyshop', v.body_place) : '',
     tab === 'bodyshop' ? detailRow('Since', v.body_since && fmtDate(v.body_since)) : '',
+    v.services.includes('bodykit') ? detailRow('Body kit', v.bodykit_note || 'Requested') : '',
     sold ? detailRow('Salesperson', v.seller) : '',
     v.status !== 'delivered' ? detailRow('VRT / NCT', v.vrt_nct) : '',
     sold ? detailRow('Mechanical', v.mechanical_notes) : '',
@@ -1067,6 +1114,7 @@ function cardHTML(v) {
   if ('viewing_at' in v && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)) {  // (after 027_*.sql)
     actions = refreshButtons(v) + actions;
     if (canTestdrive()) actions += b('viewing', inViewing(v) ? '👀 Viewing ✓' : '👀 Viewing', `ghost viewing-btn${inViewing(v) ? ' on' : ''}`);  // sales team (030_*.sql)
+    if (canTestdrive() && inViewing(v)) actions += b('viewdone', `${ICON.check} Done`, 'ghost viewing-btn');
   }
   if ('testdrive_since' in v && canTestdrive() && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)) {  // (after 028_*.sql)
     actions = (onTestdrive(v) ? b('testback', `${ICON.check} Back from test drive`, 'testdrive-btn on') : b('testdrive', '🚗 Test drive', 'ghost testdrive-btn')) + actions;
@@ -1207,7 +1255,7 @@ function listHTML(tab) {
     const here = !list.length ? ''
       : tab === 'sold' ? soldHTML(list) : tab === 'viewing' ? viewingHTML(list)
         : tab === 'dent' ? dentHTML(list) : list.map(cardHTML).join('');
-    if (!S.search) return here || `<p class="empty">${EMPTY[tab]}</p>`;
+    if (!S.search) return (tab === 'viewing' ? viewingStatsHTML() : '') + (here || `<p class="empty">${EMPTY[tab]}</p>`);
 
     const shown = new Set(list.map(v => v.id));
     const elsewhere = $$('.tabs button:not([hidden])').map(b => b.dataset.tab)
@@ -1288,7 +1336,8 @@ function printSoldList() {
       + (v.ready_state === 'done' ? '<br><strong>✓ READY TO GO</strong>'
         : v.ready_state === 'doing' ? `<br>Prep: ${esc(nameOf(v.ready_by))}` : '');
     const notes = [clean(v.notes), clean(v.mechanical_notes) && `Mechanical: ${clean(v.mechanical_notes)}`,
-      clean(v.vrt_nct) && `VRT/NCT: ${clean(v.vrt_nct)}`, inDent(v) && `Dent: ${clean(v.dent_notes) || 'on the dent list'}`,
+      clean(v.vrt_nct) && `VRT/NCT: ${clean(v.vrt_nct)}`,
+      v.services.includes('bodykit') && `Body kit: ${clean(v.bodykit_note) || 'requested'}`, inDent(v) && `Dent: ${clean(v.dent_notes) || 'on the dent list'}`,
       ...openIssues(v).map(i => `Issue: ${issueText(i)}`)]
       .filter(Boolean).map(esc).join('<br>');
     rows.push({ cells: [
@@ -1348,6 +1397,10 @@ function printCurrentList() {
 async function onListClick(e) {
   const go = e.target.closest('[data-goto-tab]');
   if (go) { switchTab(go.dataset.gotoTab); window.scrollTo(0, 0); return; }
+  if (e.target.closest('[data-clear-viewings]')) {
+    const cars = pastViewingsToday();
+    return canTestdrive() && cars.length && viewingsDone(cars);
+  }
   const btn = e.target.closest('[data-act]');
   if (!btn) return;
   const id = btn.closest('[data-id]')?.dataset.id;
@@ -1369,6 +1422,7 @@ async function onListClick(e) {
   if (act === 'dentphoto') return openPhotoPath(btn.dataset.path, [v.reg_ie, v.reg_imp].filter(Boolean).join(' / '));
 
   if (act === 'viewing') return canTestdrive() && openViewingForm(v);
+  if (act === 'viewdone') return canTestdrive() && viewingsDone([v]);
   if (act === 'testdrive' || act === 'testback') return canTestdrive() && setTestdrive(v, act === 'testdrive');
   if (act === 'refresh') return cycleRefresh(v, btn);
   if (act === 'unrefresh') return cycleRefresh(v, btn, 'pending');
@@ -2009,9 +2063,10 @@ function openVehicleForm({ vehicle = null, convert = false } = {}) {
     <div class="swatches" id="swatches">${COLOURS.map(([n, h]) => `<button type="button" class="swatch" data-colour="${n}"><span class="dot" style="background:${h}"></span>${n}</button>`).join('')}</div>
     <label>VRT / NCT<input name="vrt_nct" value="${esc(v.vrt_nct)}" placeholder="e.g. done, VRT pending, 12 Oct"></label>
     <fieldset><legend>Services needed${isNew ? ' — pick at least one' : ''}</legend><div class="pills" id="svcPills">
-      <label class="pill all"><input type="checkbox" id="svcAll" ${SERVICES.every(s => services.includes(s.key)) ? 'checked' : ''}><span>All</span></label>
+      <label class="pill all"><input type="checkbox" id="svcAll" ${CLEANING.every(s => services.includes(s.key)) ? 'checked' : ''}><span>All</span></label>
       ${SERVICES.map(svcPill).join('')}
     </div></fieldset>
+    <label id="bodykitBox" ${services.includes('bodykit') ? '' : 'hidden'}>Which body kit?<input name="bodykit_note" value="${esc(v.bodykit_note)}" placeholder="e.g. M Sport front lip + side skirts"></label>
     <div class="section-label">Status</div>
     <div class="pills">
       <label class="pill urgent"><input type="checkbox" name="urgent" ${v.urgent ? 'checked' : ''}><span>Urgent</span></label>
@@ -2054,11 +2109,13 @@ function openVehicleForm({ vehicle = null, convert = false } = {}) {
   });
   colourInput.addEventListener('input', markSwatch);
 
-  // "All" ticks every service; it stays in sync when services are ticked one by one.
-  const svcBoxes = SERVICES.map(s => form.elements[`svc_${s.key}`]);
+  // "All" ticks every cleaning job; it stays in sync when they're ticked one by one.
+  const svcBoxes = CLEANING.map(s => form.elements[`svc_${s.key}`]);
   const allBox = $('#svcAll', form);
   allBox.addEventListener('change', () => svcBoxes.forEach(b => { b.checked = allBox.checked; }));
   svcBoxes.forEach(b => b.addEventListener('change', () => { allBox.checked = svcBoxes.every(x => x.checked); }));
+  // Body kit ticked → say which kit
+  form.elements.svc_bodykit?.addEventListener('change', e => { $('#bodykitBox', form).hidden = !e.target.checked; });
 
   // Already sold: show the sale fields, and it's a priority (Urgent) unless unticked
   $('#alreadySold', form)?.addEventListener('change', e => {
@@ -2115,6 +2172,7 @@ function openVehicleForm({ vehicle = null, convert = false } = {}) {
       urgent: f.urgent.checked,
       stock_status: form.querySelector('[name=stock_status]:checked')?.value ?? 'in_stock',
       vrt_nct: clean(f.vrt_nct.value),
+      bodykit_note: clean(f.bodykit_note.value),
     };
     if (!row.reg_ie && !row.reg_imp) return showError('Enter at least one registration (IRL or IMP).');
     // (an existing car keeping its plates isn't checked again)
@@ -2944,7 +3002,8 @@ const HELP = [
   { id: 'viewing', title: 'Viewings & refresh', tabs: ['viewing'], body: `
     <p>The sales team taps <b>👀 Viewing</b> on a car and picks the day and time. The refresh team gets a notification, and the car goes to the top of Stock and on the <b>Viewings</b> tab.</p>
     <p>Refresh team: tap <b>▶ Start refresh</b> when you take the car and <b>✓ Refreshed</b> when it’s ready — whoever booked it is told each time.</p>
-    <p>After the viewing, the sales team opens <b>👀 Viewing ✓</b> and taps <b>Viewing done</b>.</p>` },
+    <p>After the viewing, the sales team taps <b>✓ Done</b> on the car — or <b>✓ Clear past</b> on Today to clear all the ones whose time has gone. Anything left is cleared by itself at midnight.</p>
+    <p>Every viewing goes on the car’s <b>🔧 Log</b> (who booked it, who refreshed it), and the top of the tab counts the viewings this week and this month.</p>` },
   { id: 'testdrive', title: 'Test drives (sales)', tabs: ['stock', 'sold'], body: `
     <p>Sales team: tap <b>🚗 Test drive</b> on a car when it goes out — everyone sees <b>ON TEST DRIVE</b> with your name and the time. No customer details needed.</p>
     <p>When it’s back, tap <b>✓ Back from test drive</b>. The drive is added to the car’s work log by itself.</p>` },
@@ -2954,6 +3013,9 @@ const HELP = [
   { id: 'worklog', title: 'Work log (what was done)', tabs: ['stock', 'sold', 'in_prep', 'delivered'], body: `
     <p>Did something on a car that isn’t one of the job bubbles (e.g. <i>grille wrapped</i>, <i>diffuser sprayed</i>)? Tap <b>🔧 Log</b> on its card and write it. Your name and the date are added by themselves.</p>
     <p>The card shows the latest entry; tap it to see everything done on that car. Fixed issues are logged automatically.</p>` },
+  { id: 'bodykit', title: 'Body kit', tabs: ['stock', 'in_prep', 'sold'], body: `
+    <p>A manager ticks <b>Body kit</b> on a car (Edit) and writes which kit — it shows on the card as <b>Body kit: …</b>.</p>
+    <p>Whoever fits body kits gets the button: <b>▶</b> when you start, tap again when it’s done. The car isn’t ready until the kit is on.</p>` },
   { id: 'dent', title: 'Dent list', tabs: ['dent'], body: `
     <p>Tap <b>Dent</b> on a car, write where the dent is and add up to 3 photos. The car stays where it is — it’s just added to the list, where the photos show (tap one to enlarge).</p>
     <p>The manager can print the list from the <b>Dent</b> tab. When a car is fixed, the person who signs dents off taps <b>Done</b>.</p>` },
@@ -3306,7 +3368,7 @@ async function loadChanges() {
   if (err) throw err;
   const keep = new Set(ids.data.map(r => r.id));
   for (const id of [...S.vehicles.keys()]) if (!keep.has(id)) S.vehicles.delete(id);
-  for (const row of changed.data) S.vehicles.set(row.id, row);
+  for (const row of changed.data) S.vehicles.set(row.id, withJobs(row));
   S.profiles = new Map(p.data.map(x => [x.id, x]));
   S.me = S.profiles.get(S.session.user.id) ?? S.me;
   S.syncedAt = mark;
