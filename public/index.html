@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0b0b0c">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <title>M6 Motors Prep</title>
+  <title>M6 Motors — Dealer System</title>
   <link rel="icon" href="icon.png">
   <link rel="apple-touch-icon" href="icon.png">
   <link rel="manifest" href="manifest.webmanifest">
@@ -13,8 +13,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <!-- Bump ?v= after changing these files so phones load the new version -->
-  <link rel="stylesheet" href="styles.css?v=108">
-  <script type="module" src="app.js?v=108"></script>
+  <link rel="stylesheet" href="styles.css?v=109">
+  <script type="module" src="app.js?v=109"></script>
 </head>
 <body>
   <!-- Shown until config.js is filled in -->
@@ -30,7 +30,7 @@
     <form id="loginForm" class="auth-card">
       <div class="logo logo-lg"><img src="logo.png" alt="M6 Motors" onerror="this.remove()"><span>M6</span></div>
       <h1>M6 Motors</h1>
-      <p class="muted">Vehicle prep — staff sign in</p>
+      <p class="muted">Dealer system — staff sign in</p>
       <label>Name<input name="login" type="text" autocomplete="username" autocapitalize="words" autocorrect="off" spellcheck="false" required></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
       <label class="check"><input type="checkbox" name="remember" checked> Keep me signed in</label>
@@ -46,12 +46,13 @@
       <div class="logo"><img src="logo.png" alt="M6 Motors" onerror="this.remove()"><span>M6</span></div>
       <div class="brand">
         <strong>M6 Motors</strong>
-        <span id="viewTitle">Vehicle prep</span>
+        <span id="viewTitle">Dealer system</span>
       </div>
       <button id="onlineBtn" class="online-pill" type="button" hidden></button>
       <div id="clock" class="clock" aria-live="off"><strong></strong><span></span></div>
       <button id="trainingBtn" class="icon-btn" type="button" aria-label="Training videos" title="Training videos"></button>
       <button id="suppliesBtn" class="icon-btn badge-host" type="button" aria-label="Supplies" title="Supplies — ask for materials"><span id="suppliesBadge" class="icon-badge" hidden></span></button>
+      <button id="overviewBtn" class="icon-btn admin-only" type="button" aria-label="Overview" title="Overview — the company at a glance"></button>
       <button id="teamBtn" class="icon-btn admin-only" type="button" aria-label="Team" title="Team"></button>
       <button id="reportBtn" class="icon-btn admin-only" type="button" aria-label="Pay report" title="Pay report"></button>
       <button id="meBtn" class="avatar" type="button" aria-label="Account" title="Account"></button>
@@ -87,6 +88,7 @@
       </div>
     </main>
 
+    <section id="overviewView" class="page overview" hidden></section>
     <section id="teamView" class="page" hidden></section>
     <section id="reportView" class="page" hidden></section>
     <section id="suppliesView" class="page" hidden></section>

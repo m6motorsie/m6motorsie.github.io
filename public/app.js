@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '108';
+const APP_VERSION = '109';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -59,6 +59,8 @@ const ICON = {
   // Play button on a screen: training videos
   video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="3.5"/><path d="M10 9.2v5.6l4.8-2.8z" fill="currentColor"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
+  // Four tiles: the Overview (the company at a glance)
+  overview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="9" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="1.5"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="1.5"/><rect x="3" y="15" width="7.5" height="6" rx="1.5"/></svg>',
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
 };
 
@@ -529,9 +531,11 @@ function setView(view) {
   $('#teamView').hidden = view !== 'team';
   $('#reportView').hidden = view !== 'report';
   $('#suppliesView').hidden = view !== 'supplies';
+  $('#overviewView').hidden = view !== 'overview';
   $('#backBtn').hidden = view === 'main';
-  $('#viewTitle').textContent = { main: 'Vehicle prep', team: 'Team', report: 'Pay report', supplies: 'Supplies' }[view];
+  $('#viewTitle').textContent = { main: 'Dealer system', team: 'Team', report: 'Pay report', supplies: 'Supplies', overview: 'Overview' }[view];
   window.scrollTo(0, 0);
+  if (view === 'overview') { renderOverview(); loadMonthJobs(); }
   if (view === 'team') renderTeam();
   if (view === 'report') renderReport();
   if (view === 'supplies') renderSupplies();
@@ -551,6 +555,7 @@ function renderAll() {
   renderList();
   if (S.view === 'team') renderTeam();
   if (S.view === 'supplies') renderSupplies();
+  if (S.view === 'overview') renderOverview();
 }
 
 // ---------------------------------------------------------------------
@@ -981,14 +986,19 @@ function viewingsDone(cars) {
 const pastViewingsToday = () => [...S.vehicles.values()]
   .filter(v => inViewing(v) && dayDiff(inputDate(new Date(v.viewing_at))) === 0 && new Date(v.viewing_at) < new Date());
 
-// "👀 5 viewings this week · 18 this month": the work log (done ones) + the ones booked
-function viewingStatsHTML() {
-  if (!S.workLogReady) return '';
+// Viewings in a period: the work log (done ones) + the ones booked
+function viewingCount(preset) {
+  const [a, b] = presetRange(preset);
   const times = [];
   for (const log of S.workLog.values()) for (const w of log) if (w.note.startsWith('👀 Viewing')) times.push(new Date(w.created_at));
   for (const v of S.vehicles.values()) if (inViewing(v)) times.push(new Date(v.viewing_at));
-  const count = preset => { const [a, b] = presetRange(preset); return times.filter(t => t >= a && t < b).length; };
-  const week = count('this-week'), month = count('this-month');
+  return times.filter(t => t >= a && t < b).length;
+}
+
+// "👀 5 viewings this week · 18 this month"
+function viewingStatsHTML() {
+  if (!S.workLogReady) return '';
+  const week = viewingCount('this-week'), month = viewingCount('this-month');
   return `<p class="viewing-stats">👀 <strong>${week}</strong> ${week === 1 ? 'viewing' : 'viewings'} this week · <strong>${month}</strong> this month</p>`;
 }
 
@@ -2439,6 +2449,128 @@ async function savePerson(id, input) {
 }
 
 // ---------------------------------------------------------------------
+// Overview (managers): the whole company at a glance — what's in stock and
+// sold, what goes out today, viewings, cars out of the building, what needs
+// attention, how old the stock is and who is working on what right now.
+// Everything comes from the data the app already has.
+// ---------------------------------------------------------------------
+const monthJobs = { rows: null, at: 0 };
+async function loadMonthJobs() {
+  if (Date.now() - monthJobs.at < 60 * 1000) return;
+  const { data, error } = await sb.from('service_completions').select('service, done_at')
+    .gte('done_at', presetRange('this-month')[0].toISOString());
+  if (error) return;
+  monthJobs.rows = data;
+  monthJobs.at = Date.now();
+  if (S.view === 'overview') renderOverview();
+}
+
+const carName = v => [v.make, v.model].map(clean).filter(Boolean).join(' ') || 'Unknown vehicle';
+const plateText = v => [v.reg_ie, v.reg_imp].map(clean).filter(Boolean).join(' / ');
+const daysSince = ts => Math.floor((Date.now() - new Date(ts)) / 864e5);
+
+function renderOverview() {
+  const view = $('#overviewView');
+  if (!view || !S.me) return;
+  const live = [...S.vehicles.values()].filter(v => v.status !== 'delivered');
+  const all = [...S.vehicles.values()];
+  const stock = live.filter(v => v.status === 'stock');
+  const sold = live.filter(isSold);
+  const where = tab => live.filter(v => tabOf(v) === tab);
+  const [mStart, mEnd] = presetRange('this-month');
+  const inMonth = ts => ts && new Date(ts) >= mStart && new Date(ts) < mEnd;
+  const lateOut = tab => where(tab).filter(v => { const d = tab === 'loan' ? v.loan_due : v.body_due; return d && dayDiff(d) < 0; }).length;
+  const issues = live.reduce((n, v) => n + openIssues(v).length, 0);
+
+  const tile = (n, label, tab, { cls = '', sub = '' } = {}) => `<button type="button" class="ov-tile ${cls}"${tab ? ` data-ov-tab="${tab}"` : ''}>
+    <strong>${n}</strong><span>${label}</span>${sub ? `<small>${sub}</small>` : ''}</button>`;
+  const outToday = sold.filter(dueToday).length;
+  const ready = sold.filter(v => v.ready_state === 'done').length;
+  const viewingsToday = live.filter(v => inViewing(v) && dayDiff(inputDate(new Date(v.viewing_at))) === 0).length;
+  const now = [
+    tile(stock.length, 'In stock', 'stock'),
+    tile(sold.length, 'Sold — to deliver', 'sold'),
+    tile(outToday, 'Going out today', 'sold', { cls: outToday ? 'hot' : '' }),
+    tile(ready, 'Ready to go', 'sold', { cls: ready ? 'good' : '' }),
+    tile(live.filter(isWorking).length, 'Being worked on', 'in_prep'),
+    tile(viewingsToday, 'Viewings today', canSeeViewings() ? 'viewing' : ''),
+    tile(live.filter(onTestdrive).length, 'On a test drive', 'stock'),
+    tile(where('bodyshop').length, 'At the bodyshop', 'bodyshop', { sub: lateOut('bodyshop') ? `${lateOut('bodyshop')} overdue` : '' }),
+    tile(where('loan').length, 'On loan', 'loan', { sub: lateOut('loan') ? `${lateOut('loan')} overdue` : '' }),
+    tile(live.filter(inDent).length, 'On the dent list', 'dent'),
+    tile(issues, 'Open issues', '', { cls: issues ? 'warn' : '' }),
+  ].join('');
+
+  // This month
+  const jobs = monthJobs.rows;
+  const jobCount = key => (jobs ?? []).filter(r => r.service === key).length;
+  const month = [
+    tile(all.filter(v => inMonth(v.sold_at)).length, 'Cars sold', ''),
+    tile(all.filter(v => v.status === 'delivered' && inMonth(v.delivered_at)).length, 'Delivered', isAdmin() ? 'delivered' : ''),
+    tile(viewingCount('this-month'), 'Viewings', canSeeViewings() ? 'viewing' : ''),
+    ...SERVICES.map(sv => tile(jobs ? jobCount(sv.key) : '…', `${sv.label} done`, '')),
+  ].join('');
+
+  // Needs attention: the things that cost money or a customer if they slip
+  const att = [];
+  for (const v of sold) {
+    const d = v.delivery_date ? dayDiff(v.delivery_date) : null;
+    if (d !== null && d < 0) att.push([0, v, 'sold', `Delivery overdue — was ${dayName(v.delivery_date)}`]);
+    else if (d !== null && d <= 1 && !v.done_at) att.push([1, v, 'sold', `Jobs not finished — delivery ${dayName(v.delivery_date)}`]);
+    if (v.stock_status === 'due_in' && d !== null && d <= 2) att.push([1, v, 'sold', `Not on site yet — delivery ${dayName(v.delivery_date)}`]);
+  }
+  for (const v of where('loan')) if (v.loan_due && dayDiff(v.loan_due) < 0) att.push([2, v, 'loan', `Loan overdue — was due ${dayName(v.loan_due)}`]);
+  for (const v of where('bodyshop')) if (v.body_due && dayDiff(v.body_due) < 0) att.push([2, v, 'bodyshop', `Bodyshop overdue — was due ${dayName(v.body_due)}`]);
+  for (const v of stock) if (daysSince(v.created_at) >= 60) att.push([3, v, tabOf(v), `In stock ${daysSince(v.created_at)} days`]);
+  att.sort((a, b) => a[0] - b[0]);
+  const shown = att.slice(0, 10);
+  const attention = shown.length ? `<div class="ov-list">${shown.map(([lvl, v, tab, text]) => `<button type="button" class="ov-line lvl${lvl}" data-ov-tab="${tab}" data-ov-car="${v.id}">
+      <span class="ov-dot"></span><span><strong>${esc(text)}</strong><small>${esc(carName(v))} · ${esc(plateText(v))}</small></span><span class="person-chevron">›</span>
+    </button>`).join('')}${att.length > shown.length ? `<p class="muted">…and ${att.length - shown.length} more</p>` : ''}</div>`
+    : '<p class="muted">Nothing overdue or at risk right now. 👍</p>';
+
+  // Stock age
+  const buckets = [['Under 30 days', 0, 30], ['30–59 days', 30, 60], ['60–89 days', 60, 90], ['90 days +', 90, Infinity]]
+    .map(([label, a, b]) => [label, stock.filter(v => { const d = daysSince(v.created_at); return d >= a && d < b; }).length]);
+  const most = Math.max(1, ...buckets.map(([, n]) => n));
+  const age = `<div class="ov-bars">${buckets.map(([label, n], i) => `<div class="ov-bar"><span>${label}</span>
+      <span class="ov-track"><span class="ov-fill age${i}" style="width:${Math.round(n / most * 100)}%"></span></span><strong>${n}</strong></div>`).join('')}</div>`;
+
+  // Who is working on what, right now
+  const doing = [];
+  for (const v of live) {
+    for (const sv of SERVICES) if (v.services.includes(sv.key) && v[`${sv.key}_state`] === 'doing') doing.push([v[`${sv.key}_by`], sv.label, v]);
+    if (isSold(v) && v.ready_state === 'doing') doing.push([v.ready_by, 'Delivery prep', v]);
+    if (inViewing(v) && v.refresh_state === 'doing') doing.push([v.refresh_by, 'Refresh for a viewing', v]);
+  }
+  const team = doing.length ? `<div class="ov-list">${doing.map(([by, job, v]) => `<div class="ov-work">
+      <span class="ring half"></span><span><strong>${esc(nameOf(by))}</strong> — ${esc(job)}<small>${esc(carName(v))} · ${esc(plateText(v))}</small></span></div>`).join('')}</div>`
+    : '<p class="muted">Nobody has a job started right now.</p>';
+
+  view.innerHTML = `
+    <div class="ov-head">
+      <h1>M6 Motors today</h1>
+      <p class="muted">${esc(new Date().toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' }))} · live from the app</p>
+    </div>
+    <div class="panel"><h2>Right now</h2><div class="ov-tiles">${now}</div></div>
+    <div class="panel"><h2>Needs attention <span class="badge${att.length ? '' : ' grey'}">${att.length}</span></h2>${attention}</div>
+    <div class="panel"><h2>This month</h2><div class="ov-tiles">${month}</div></div>
+    <div class="ov-two">
+      <div class="panel"><h2>Stock age</h2>${age}</div>
+      <div class="panel"><h2>At work now</h2>${team}</div>
+    </div>
+    <p class="muted team-hint">Tap a number or a line to open that list.</p>`;
+}
+
+function onOverviewClick(e) {
+  const b = e.target.closest('[data-ov-tab]');
+  if (!b || !b.dataset.ovTab) return;
+  setView('main');
+  if (b.dataset.ovCar) followCard(b.dataset.ovCar, b.dataset.ovTab);
+  else { switchTab(b.dataset.ovTab); window.scrollTo(0, 0); }
+}
+
+// ---------------------------------------------------------------------
 // Pay report (admin)
 // ---------------------------------------------------------------------
 // Opens on this month (1st → last day); weeks are still one tap away
@@ -3032,6 +3164,9 @@ const HELP = [
     <p><b>+ New stock</b> (Stock tab): plate, make, model, colour, VRT / NCT, <b>the services the car needs</b> (or <b>All</b>) and Urgent / On site / Due in. Already sold? Tick <b>Already sold</b>. Scratches, scuffed wheels or missing parts? Tick them under <b>Issues on arrival</b>.</p>
     <p><b>Mark sold</b> on a stock car and pick the delivery date and time. A car that arrives already sold: <b>+ New stock</b> → <b>Already sold</b>.</p>
     <p>The <b>chart icon</b> is the pay report: Full Valet cars per person, for <b>this month</b> (or this / last week). Print it before using the 🗑 to clear someone’s records.</p>` },
+  { id: 'overview', title: 'Overview (managers)', tabs: [], admin: true, body: `
+    <p>The <b>four-squares icon</b> at the top opens the Overview: the whole company at a glance — stock, sold cars, what goes out today, viewings, cars at the bodyshop or on loan, what needs attention, how old the stock is and who is working on what right now.</p>
+    <p>Everything is live from the app. Tap any number or line to open that list.</p>` },
   { id: 'phone', title: 'Phone tips', tabs: [], body: `
     <ul><li><b>iPhone:</b> Safari → Share → <b>Add to Home Screen</b>. Open it from the icon.</li>
       <li><b>Notifications:</b> tap your initial (top right) → <b>Enable notifications</b>.</li>
@@ -3047,7 +3182,7 @@ function openHelp() {
     <div class="help">${topics.map(h => `<details ${h.id === first ? 'open' : ''}>
       <summary>${esc(h.title)}</summary><div class="help-body">${h.body}</div>
     </details>`).join('')}</div>
-    <p class="muted" style="font-size:13px;margin:14px 0 0">Still stuck? Ask the manager. · App version ${esc(APP_VERSION)}</p>`);
+    <p class="muted" style="font-size:13px;margin:14px 0 0">Still stuck? Ask the manager. · M6 Motors Dealer System · version ${esc(APP_VERSION)}</p>`);
 }
 
 // ---------------------------------------------------------------------
@@ -3173,12 +3308,21 @@ async function onSessionChange() {
   subscribe();
   syncPush();
   touchLastSeen();
+  // The sales managers (Alan, Eanna, Derek) start on the Overview when the app opens
+  if (isAdmin() && canTestdrive()) {
+    let shown = false;
+    try { shown = sessionStorage.getItem('m6.overviewShown') === '1'; sessionStorage.setItem('m6.overviewShown', '1'); } catch {}
+    if (!shown) setView('overview');
+  }
 }
 
 function wireUi() {
   $('#backBtn').innerHTML = ICON.back;
   $('#teamBtn').innerHTML = ICON.team;
   $('#reportBtn').innerHTML = ICON.report;
+  $('#overviewBtn').innerHTML = ICON.overview;
+  $('#overviewBtn').addEventListener('click', () => setView('overview'));
+  $('#overviewView').addEventListener('click', onOverviewClick);
 
   try { S.tab = localStorage.getItem('m6.tab') || S.tab; } catch {}
   // A tapped notification opens the app on its tab (e.g. ?tab=stock)
