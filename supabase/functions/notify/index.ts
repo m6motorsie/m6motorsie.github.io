@@ -13,7 +13,7 @@
 // checks the event really just happened, and sends each announcement at most
 // once, so calling it by hand can't spam anyone.
 //
-// Secret required (Edge Functions → Secrets): VAPID_PRIVATE_KEY
+// Secrets required (Edge Functions → Secrets): VAPID_PRIVATE_KEY, M6_NOTIFY_SECRET
 import webpush from "npm:web-push@3.6.7";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -192,6 +192,11 @@ async function morning() {
 }
 
 Deno.serve(async (req) => {
+  const expectedSecret = Deno.env.get("M6_NOTIFY_SECRET");
+  if (!expectedSecret) return json({ error: "notification authentication is not configured" }, 503);
+  if (req.headers.get("x-m6-notify-secret") !== expectedSecret) {
+    return json({ error: "unauthorized" }, 401);
+  }
   const { vehicle_id, event = "new_stock" } = await req.json().catch(() => ({}));
   if (event === "morning") return morning();
   if (!vehicle_id) return json({ error: "bad request" }, 400);
