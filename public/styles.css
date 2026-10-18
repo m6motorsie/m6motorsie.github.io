@@ -240,6 +240,7 @@ main .tabs, main .toolbar { max-width: 900px; margin-left: auto; margin-right: a
 .chip.urgent { background: var(--urgent); border-color: var(--urgent); color: #fff; font-weight: 700; }
 .chip.warn { background: var(--doing-bg); border-color: var(--doing-bd); color: var(--doing-fg); }
 .chip.ok { background: var(--done-bg); border-color: var(--done-bd); color: var(--done-fg); }
+.chip.prep-state { background: var(--doing-bg); border-color: var(--doing-bd); color: var(--doing-fg); font-weight: 600; }
 .chip.body { background: #b4541a; border-color: #b4541a; color: #fff; font-weight: 700; }
 .chip.hold { background: #5b3fd1; border-color: #5b3fd1; color: #fff; font-weight: 700; }
 .chip.sold { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 700; }
@@ -342,8 +343,18 @@ main .tabs, main .toolbar { max-width: 900px; margin-left: auto; margin-right: a
 .svc.extra:hover, .svc.extra:focus-visible { opacity: 1; }
 .svc .plus { width: 16px; text-align: center; font-weight: 700; font-size: 16px; line-height: 1; }
 
-.card-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
-.card-actions .spacer { flex: 1; }
+.card-actions { position: relative; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.card-more { position: relative; margin-right: auto; }
+.card-more > summary { list-style: none; cursor: pointer; }
+.card-more > summary::-webkit-details-marker { display: none; }
+.card-more[open] > summary { border-color: var(--border); }
+.card-more-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 12;
+  display: grid; gap: 6px; min-width: 130px; padding: 8px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.28);
+}
+.card-more-menu .btn { width: 100%; justify-content: flex-start; }
 
 .fab-row {
   position: fixed; right: max(16px, calc(50vw - 364px)); bottom: max(18px, env(safe-area-inset-bottom));

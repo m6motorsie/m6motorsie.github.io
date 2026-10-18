@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '111';
+const APP_VERSION = '112';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1119,7 +1119,12 @@ function cardHTML(v) {
     chips.push(v.stock_status === 'due_in' ? '<span class="chip warn">Due in</span>' : '<span class="chip">On site</span>');
   }
   if (sold && v.ready_state === 'done') chips.push(`<span class="chip ok ready">✓ READY TO GO</span>`);
-  if (v.status !== 'delivered' && v.services.length && v.done_at && v.ready_state !== 'done') chips.push('<span class="chip ok">All services done</span>');
+  if (v.status !== 'delivered' && v.services.length && v.done_at && v.ready_state !== 'done') {
+    if (sold) {
+      const prep = v.ready_state === 'doing' ? 'prep in progress' : 'prep not started';
+      chips.push(`<span class="chip prep-state">Services done · delivery ${prep}</span>`);
+    } else chips.push('<span class="chip ok">All services done</span>');
+  }
   if (v.status === 'delivered') chips.push(`<span class="chip ok">Delivered ${esc(fmtDate(v.delivered_at))}</span>`);
 
   const phone = clean(v.loan_phone);
@@ -1140,21 +1145,23 @@ function cardHTML(v) {
   const b = (act, label, cls = 'ghost') => `<button class="btn small ${cls}" data-act="${act}">${label}</button>`;
   // Dent is for the people given "Can use Dent" on the Team screen (also enforced in the DB)
   const dent = canDent() ? b('dent', inDent(v) ? 'Dent ✓' : 'Dent', `ghost dent-btn${inDent(v) ? ' on' : ''}`) : '';
-  const edit = isAdmin() ? b('edit', 'Edit') : '';  // editing car details is admin-only (also in the DB)
+  const edit = isAdmin() && v.status !== 'delivered' ? b('edit', 'Edit') : '';  // editing car details is admin-only (also in the DB)
   // Bodyshop is for the people given "Can use Bodyshop" on the Team screen (also enforced in the DB)
   const body = canBodyshop() ? b('bodyshop', 'Bodyshop') : '';
   let actions;
   if (tab === 'delivered') actions = b('reopen', 'Reopen');
-  else if (tab === 'bodyshop') actions = edit + (canBodyshop() ? b('bodyshop', 'Details') + b('release', `${ICON.check} Back from bodyshop`, 'accent') : '');
-  else if (tab === 'loan') actions = edit + (isAdmin() ? b('loan', 'Loan details', 'ghost loan-btn') + b('release', `${ICON.check} Returned`, 'accent') : '');
+  else if (tab === 'bodyshop') actions = (canBodyshop() ? b('bodyshop', 'Details') + b('release', `${ICON.check} Back from bodyshop`, 'accent') : '');
+  else if (tab === 'loan') actions = (isAdmin() ? b('loan', 'Loan details', 'ghost loan-btn') + b('release', `${ICON.check} Returned`, 'accent') : '');
   else if (sold) {
     // The sales team hands the car over: going out today / overdue, or ready to go (036_*.sql)
     const deliver = canTestdrive() && (dueToday(v) || v.ready_state === 'done')
       ? b('deliver', `${ICON.check} Delivered`, 'accent') : '';
-    actions = edit + body + dent + (soldPersonOnly() ? '' : readyButtons(v)) + deliver;
+    actions = body + dent + (soldPersonOnly() ? '' : readyButtons(v)) + deliver;
   }
-  else actions = edit + (isAdmin() ? b('loan', 'Loan', 'ghost loan-btn') : '') + body + dent + (isAdmin() ? b('sell', 'Mark sold', 'sell-btn') : '');
-  const remove = isAdmin() && v.status !== 'delivered' ? `${b('remove', 'Delete', 'ghost danger')}<span class="spacer"></span>` : '';
+  else actions = (isAdmin() ? b('loan', 'Loan', 'ghost loan-btn') : '') + body + dent + (isAdmin() ? b('sell', 'Mark sold', 'sell-btn') : '');
+  const more = isAdmin() && v.status !== 'delivered'
+    ? `<details class="card-more"><summary class="btn small ghost" aria-label="More vehicle actions">More</summary><div class="card-more-menu">${edit}${b('remove', 'Delete', 'ghost danger')}</div></details>`
+    : '';
   // Viewings: the sales team books them; the refresh people get Start refresh / Refreshed
   if ('viewing_at' in v && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)) {  // (after 027_*.sql)
     actions = refreshButtons(v) + actions;
@@ -1198,7 +1205,7 @@ function cardHTML(v) {
       : jobStatusHTML(v)}
     ${sold ? readyStatusHTML(v) : ''}
     ${refreshStatusHTML(v)}
-    <div class="card-actions">${remove}${actions}</div>
+    <div class="card-actions">${more}${actions}</div>
   </article>`;
 }
 
