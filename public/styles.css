@@ -455,6 +455,10 @@ table.compact th, table.compact td { padding: 6px 6px; font-size: 13.5px; }
 table.compact th:last-child, table.compact td:last-child { text-align: left; }
 .mono { font-family: "Barlow Condensed", sans-serif; font-size: 16px !important; letter-spacing: .04em; white-space: nowrap; }
 #reportBody { display: grid; gap: 14px; }
+#reportHistory { display: grid; gap: 14px; }
+#reportHistory[hidden] { display: none; }
+.table-scroll { overflow-x: auto; }
+.table-scroll table { min-width: 760px; }
 
 /* Daily sold-cars sheet: invisible on screen, the only thing printed while
    body.printing-sheet is set. */

@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '110';
+const APP_VERSION = '111';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -2820,7 +2820,7 @@ function renderOverview() {
   const ready = sold.filter(v => v.ready_state === 'done').length;
   const viewingsToday = live.filter(v => inViewing(v) && dayDiff(inputDate(new Date(v.viewing_at))) === 0).length;
   const now = [
-    tile(stock.length, 'In stock', 'stock'),
+    tile(where('stock').length, 'Stock list', 'stock'),
     tile(sold.length, 'Sold — to deliver', 'sold'),
     tile(outToday, 'Going out today', 'sold', { cls: outToday ? 'hot' : '' }),
     tile(ready, 'Ready to go', 'sold', { cls: ready ? 'good' : '' }),
@@ -2963,9 +2963,11 @@ function renderReport() {
         <button type="button" class="btn primary" id="reportPrintBtn">Print / Save PDF</button>
         <button type="button" class="btn" id="csvSummaryBtn">Download summary (Excel)</button>
         <button type="button" class="btn" id="csvListBtn">Download full list (Excel)</button>
+        <button type="button" class="btn" id="reportHistoryBtn">Completion history</button>
       </div>
     </div>
-    <div id="reportBody"><p class="empty">Loading…</p></div>`;
+    <div id="reportBody"><p class="empty">Loading…</p></div>
+    <div id="reportHistory" class="no-print" hidden></div>`;
 
   $('#presets').addEventListener('click', e => {
     const b = e.target.closest('[data-preset]');
@@ -2981,6 +2983,7 @@ function renderReport() {
   });
   $('#csvSummaryBtn').addEventListener('click', exportSummaryCsv);
   $('#csvListBtn').addEventListener('click', exportListCsv);
+  $('#reportHistoryBtn').addEventListener('click', loadReportHistory);
 
   $('#reportBody').addEventListener('click', e => {
     const btn = e.target.closest('[data-clear-person]');
@@ -2994,6 +2997,7 @@ function setReportPreset(preset) {
   report.preset = preset;
   [report.start, report.end] = presetRange(preset);
   loadReport();
+  if ($('#reportHistory') && !$('#reportHistory').hidden) loadReportHistory(false);
 }
 
 async function loadReport() {
@@ -3013,6 +3017,32 @@ async function loadReport() {
   drawReport();
 }
 
+async function loadReportHistory(toggle = true) {
+  const panel = $('#reportHistory');
+  const button = $('#reportHistoryBtn');
+  if (!panel || !button) return;
+  if (toggle && !panel.hidden) { panel.hidden = true; button.textContent = 'Completion history'; return; }
+  panel.hidden = false;
+  button.textContent = 'Hide history';
+  panel.innerHTML = '<div class="panel"><p class="empty">Loading history…</p></div>';
+  const { data, error } = await sb.from('service_completion_audit')
+    .select('action, service, user_name, plate, vehicle, completed_at, changed_at, changed_by_name')
+    .in('service', PAY_SERVICES.map(s => s.key))
+    .gte('changed_at', report.start.toISOString()).lt('changed_at', report.end.toISOString())
+    .order('changed_at', { ascending: false }).limit(200);
+  if (error) {
+    panel.innerHTML = `<div class="panel"><p class="empty">${esc(errorText(error))}. Apply supabase/042_service_completion_audit.sql.</p></div>`;
+    return;
+  }
+  const rows = data ?? [];
+  panel.innerHTML = `<div class="panel"><h2>Completion changes</h2>
+    <p class="muted">Up to 200 changes in this period, including records that were removed or reverted.</p>
+    ${rows.length ? `<div class="table-scroll"><table class="compact"><thead><tr><th>Change</th><th>Changed</th><th>Credited to</th><th>Plate</th><th>Car</th><th>Service date</th><th>Changed by</th></tr></thead><tbody>${rows.map(r => `<tr>
+      <td>${r.action === 'removed' ? 'Removed' : 'Completed'}</td><td>${esc(fmtDate(r.changed_at))}</td><td>${esc(r.user_name)}</td><td class="mono">${esc(r.plate)}</td><td>${esc(r.vehicle)}</td><td>${esc(fmtDate(r.completed_at))}</td><td>${esc(r.changed_by_name || 'System')}</td>
+    </tr>`).join('')}</tbody></table></div>` : '<p class="empty">No completion changes in this period.</p>'}
+  </div>`;
+}
+
 // 🗑 on a person: delete their Full Valet records for the period on screen
 // (admins only, also in the database — 022_*.sql). No undo, so two taps.
 async function clearPersonRecords(id, btn) {
@@ -3028,6 +3058,7 @@ async function clearPersonRecords(id, btn) {
   if (!data.length) return toast('Nothing was deleted — run 022_admin_clear_pay_records.sql in Supabase first.', { error: true });
   toast(`Deleted ${plural(data.length, 'record')} for ${name}`);
   loadReport();
+  if ($('#reportHistory') && !$('#reportHistory').hidden) loadReportHistory(false);
 }
 
 // The Full Valet team = people with Full Valet ticked as their job on the Team
@@ -3721,7 +3752,7 @@ function wireUi() {
   // Pre-fill the last remembered name so only the password is needed.
   const savedLogin = store.get(LOGIN_KEY);
   const loginFields = $('#loginForm').elements;
-  loginFields.remember.checked = store.get(REMEMBER_KEY) !== '0';
+  loginFields.remember.checked = store.get(REMEMBER_KEY) === '1';
   if (savedLogin) loginFields.login.value = savedLogin;
 
   wireSwipeTabs();
