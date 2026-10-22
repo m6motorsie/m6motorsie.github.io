@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '113';
+const APP_VERSION = '114';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -572,8 +572,16 @@ function setView(view) {
   if (view === 'supplies') renderSupplies();
 }
 
+// The sales managers (Alan, Eanna, Derek: Sales switch) get the sales side —
+// Mark sold, Loan, the Trade and Delivered tabs; the system admin sees those
+// tabs too. Bart (admin, no Sales) doesn't.
+const salesManager = () => isAdmin() && canTestdrive();
+const seesSalesSide = () => salesManager() || canManageTeam();
+
 function renderAll() {
   document.body.classList.toggle('is-admin', isAdmin());
+  // Training videos are for the people working on the cars, not the sales team
+  $('#trainingBtn').hidden = canTestdrive();
   $('#teamBtn').hidden = !canManageTeam();
   renderOnline();
   if (S.view === 'team' && !canManageTeam()) setView('main');
@@ -665,8 +673,8 @@ function renderTabs() {
     if (inViewing(v)) counts.viewing++;
   }
   // Delivered (history) is for managers only
-  $('.tabs [data-tab=delivered]').hidden = !isAdmin();
-  if (S.tab === 'delivered' && !isAdmin()) S.tab = 'sold';
+  $('.tabs [data-tab=delivered]').hidden = !seesSalesSide();
+  if (S.tab === 'delivered' && !seesSalesSide()) S.tab = 'sold';
   $('.tabs [data-tab=viewing]').hidden = !canSeeViewings();
   const noPrepTab = !isAdmin() && !myServiceKeys().length;
   $('.tabs [data-tab=in_prep]').hidden = noPrepTab;
@@ -1158,17 +1166,20 @@ function cardHTML(v) {
       ? b('deliver', `${ICON.check} Delivered`, 'accent') : '';
     actions = body + dent + (soldPersonOnly() ? '' : readyButtons(v)) + deliver;
   }
-  else actions = (isAdmin() ? b('loan', 'Loan', 'ghost loan-btn') : '') + body + dent + (isAdmin() ? b('sell', 'Mark sold', 'sell-btn') : '');
+  // Loan and Mark sold: the sales managers only
+  else actions = (salesManager() ? b('loan', 'Loan', 'ghost loan-btn') : '') + body + dent + (salesManager() ? b('sell', 'Mark sold', 'sell-btn') : '');
   const more = isAdmin() && v.status !== 'delivered'
     ? `<details class="card-more"><summary class="btn small ghost" aria-label="More vehicle actions">More</summary><div class="card-more-menu">${edit}${b('remove', 'Delete', 'ghost danger')}</div></details>`
     : '';
   // Viewings: the sales team books them; the refresh people get Start refresh / Refreshed
   if ('viewing_at' in v && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)) {  // (after 027_*.sql)
     actions = refreshButtons(v) + actions;
-    if (canTestdrive()) actions += b('viewing', inViewing(v) ? '👀 Viewing ✓' : '👀 Viewing', `ghost viewing-btn${inViewing(v) ? ' on' : ''}`);  // sales team (030_*.sql)
+    if (canTestdrive() && !sold) actions += b('viewing', inViewing(v) ? '👀 Viewing ✓' : '👀 Viewing', `ghost viewing-btn${inViewing(v) ? ' on' : ''}`);  // sales team (030_*.sql)
     if (canTestdrive() && inViewing(v)) actions += b('viewdone', `${ICON.check} Done`, 'ghost viewing-btn');
   }
-  if ('testdrive_since' in v && canTestdrive() && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)) {  // (after 028_*.sql)
+  // (a sold car isn't viewed or test-driven any more; one already out can still come back)
+  if ('testdrive_since' in v && canTestdrive() && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)
+      && (!sold || onTestdrive(v))) {  // (after 028_*.sql)
     actions = (onTestdrive(v) ? b('testback', `${ICON.check} Back from test drive`, 'testdrive-btn on') : b('testdrive', '🚗 Test drive', 'ghost testdrive-btn')) + actions;
   }
   // Anyone on staff can note a problem (wheels, missing part…)
@@ -1465,7 +1476,7 @@ async function onListClick(e) {
 
   if (act === 'svc') return cycleService(v, btn.dataset.key, btn);
   if (act === 'edit') return isAdmin() && openVehicleForm({ vehicle: v });
-  if (act === 'sell') return isAdmin() && openVehicleForm({ vehicle: v, convert: true });
+  if (act === 'sell') return salesManager() && openVehicleForm({ vehicle: v, convert: true });
   if (act === 'photo') return openPhoto(v);
   if (act === 'issues') return openIssueSheet(v);
   if (act === 'worklog') return openWorkSheet(v);
@@ -2499,7 +2510,7 @@ async function savePerson(id, input) {
 // the sales team logs the car, collects offers, accepts the best, and marks
 // it collected and paid. Prices: managers + sales only (041_*.sql).
 // ---------------------------------------------------------------------
-const canTrade = () => isAdmin() || canTestdrive();
+const canTrade = () => seesSalesSide();
 // Still needs something doing: on site, sold (to be collected) or not paid yet
 const tradeOpen = t => t.status === 'in' || t.status === 'sold' || (t.status === 'collected' && !t.paid_at);
 const euro = n => (n == null || n === '' ? '' : `€${Number(n).toLocaleString('en-IE', { maximumFractionDigits: 0 })}`);
@@ -2847,7 +2858,7 @@ function renderOverview() {
   const jobCount = key => (jobs ?? []).filter(r => r.service === key).length;
   const month = [
     tile(all.filter(v => inMonth(v.sold_at)).length, 'Cars sold', ''),
-    tile(all.filter(v => v.status === 'delivered' && inMonth(v.delivered_at)).length, 'Delivered', isAdmin() ? 'delivered' : ''),
+    tile(all.filter(v => v.status === 'delivered' && inMonth(v.delivered_at)).length, 'Delivered', seesSalesSide() ? 'delivered' : ''),
     tile(viewingCount('this-month'), 'Viewings', canSeeViewings() ? 'viewing' : ''),
     ...SERVICES.map(sv => tile(jobs ? jobCount(sv.key) : '…', `${sv.label} done`, '')),
   ].join('');
