@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '112';
+const APP_VERSION = '113';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -2647,12 +2647,12 @@ async function tradeToRetail(t) {
     notes: [clean(t.year) && `Year ${clean(t.year)}`, clean(t.mileage) && `${clean(t.mileage)} km`, 'From part-ex', clean(t.notes)].filter(Boolean).join(' · '),
     services: ['first', 'full'], status: 'stock', stock_status: 'in_stock', photo_path: t.photo_path || null,
   };
-  if (!row.reg_ie && !row.reg_imp) throw new Error('Add the registration first (Edit).');
+  if (!row.reg_ie && !row.reg_imp) throw new Error('Add the registration first (Edit on the trade car).');
   const { data, error } = await sb.from('vehicles').insert(row).select().single();
   if (error) throw error;
   upsertLocal(data);
   await saveTrade(t.id, { status: 'retail', photo_path: null });  // the photo now belongs to the stock car
-  toast('Moved to Stock — tap Edit there to change its jobs', { action: { label: 'Show', run: () => followCard(data.id, tabOf(data)) } });
+  toast('Moved to Stock — More → Edit there to change its jobs', { action: { label: 'Show', run: () => followCard(data.id, tabOf(data)) } });
 }
 
 function openTradeForm(t = null) {
@@ -3492,7 +3492,7 @@ const HELP = [
     <ul><li><b>○ Grey</b> — still to do.</li>
       <li><b>◐ Amber</b> — someone is working on it (shows their name).</li>
       <li><b>✓ Green</b> — done (shows who and when).</li>
-      <li><b>Not needed on this car</b> — that job wasn’t asked for. Only a manager can add it (Edit).</li></ul>
+      <li><b>Not needed on this car</b> — that job wasn’t asked for. Only a manager can add it (More → Edit).</li></ul>
     <p><b>Tap ▶ when you start</b>, <b>tap again when you finish</b>. Finishing a Full Valet closes the First Clean if it isn’t done (the Full Valet covered it). The <b>In prep</b> tab shows the cars you are working on. The job goes in <b>your name</b> — that’s what counts for pay (Full Valet) and for your monthly counter, so always use your own login.</p>
     <p>Tapped by mistake on a green one? Tap it twice to undo.</p>
     <p>🔒 A job someone else started or finished is theirs: only they (or a manager) can change it.</p>` },
@@ -3526,7 +3526,7 @@ const HELP = [
     <p>Did something on a car that isn’t one of the job bubbles (e.g. <i>grille wrapped</i>, <i>diffuser sprayed</i>)? Tap <b>🔧 Log</b> on its card and write it. Your name and the date are added by themselves.</p>
     <p>The card shows the latest entry; tap it to see everything done on that car. Fixed issues are logged automatically.</p>` },
   { id: 'bodykit', title: 'Body kit', tabs: ['stock', 'in_prep', 'sold'], body: `
-    <p>A manager ticks <b>Body kit</b> on a car (Edit) and writes which kit — it shows on the card as <b>Body kit: …</b>.</p>
+    <p>A manager ticks <b>Body kit</b> on a car (<b>More → Edit</b>) and writes which kit — it shows on the card as <b>Body kit: …</b>.</p>
     <p>Whoever fits body kits gets the button: <b>▶</b> when you start, tap again when it’s done. The car isn’t ready until the kit is on.</p>` },
   { id: 'dent', title: 'Dent list', tabs: ['dent'], body: `
     <p>Tap <b>Dent</b> on a car, write where the dent is and add up to 3 photos. The car stays where it is — it’s just added to the list, where the photos show (tap one to enlarge).</p>
@@ -3785,6 +3785,13 @@ function wireUi() {
   $('#myCount').addEventListener('click', openMyMonth);
   $('#fab').addEventListener('click', () => (S.tab === 'trade' ? openTradeForm() : openVehicleForm()));
   $('#list').addEventListener('click', onListClick);
+  // A card's "More" menu: one open at a time; tapping elsewhere (or an item in it) closes it
+  document.addEventListener('click', e => {
+    const inside = e.target.closest('.card-more');
+    for (const d of $$('.card-more[open]')) {
+      if (d !== inside || e.target.closest('.card-more-menu [data-act=edit]')) d.open = false;
+    }
+  });
 
   $('#teamBtn').addEventListener('click', () => canManageTeam() && setView('team'));
   $('#onlineBtn').addEventListener('click', () => canManageTeam() && setView('team'));

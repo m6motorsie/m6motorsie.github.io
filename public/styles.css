@@ -344,6 +344,7 @@ main .tabs, main .toolbar { max-width: 900px; margin-left: auto; margin-right: a
 .svc .plus { width: 16px; text-align: center; font-weight: 700; font-size: 16px; line-height: 1; }
 
 .card-actions { position: relative; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.card-actions .spacer { flex: 1; }  /* trade cards: Delete on the left */
 .card-more { position: relative; margin-right: auto; }
 .card-more > summary { list-style: none; cursor: pointer; }
 .card-more > summary::-webkit-details-marker { display: none; }
