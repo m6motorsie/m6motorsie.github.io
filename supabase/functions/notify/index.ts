@@ -8,6 +8,10 @@
 //   loan_returned { vehicle_id } a car is back from loan          → "loan alerts" people except who returned it
 //   viewing_booked { vehicle_id } a viewing was booked on a car   → refresh people except who booked it
 //   refresh_doing / refresh_done { vehicle_id } refresh started / done → who booked the viewing
+//   issue_added { vehicle_id, issue_id } an issue was noted on a car  → "issue alerts" people except who noted it
+//   polish_requested { vehicle_id } Polish was asked for on a car     → the polish team (Polish job ticked)
+//   polish_suggested { vehicle_id } the polish team suggests a polish → the sales team
+//   (morning also sends the open issues to the "issue alerts" people — 044_*.sql)
 //
 // It trusts nothing in the request except the vehicle id: it reloads the data,
 // checks the event really just happened, and sends each announcement at most
@@ -169,10 +173,85 @@ async function refresh(vehicle_id: string, event: "refresh_doing" | "refresh_don
   }, { onlyUsers: v.viewing_by ? [v.viewing_by] : [], exceptUser: v.refresh_by ?? undefined }));
 }
 
+const ISSUE_LABEL: Record<string, string> = {
+  mats: "🟫 Mats missing", wheels: "🛞 Wheels / alloys", interior: "🧩 Missing interior part",
+  scratch: "🎨 Scratch / paint", other: "⚠️ Issue",
+};
+
+async function issueAdded(vehicle_id: string, issue_id?: number) {
+  if (!issue_id) return json({ error: "bad request" }, 400);
+  const { data: i } = await db.from("vehicle_issues").select("*").eq("id", issue_id).maybeSingle();
+  if (!i || i.vehicle_id !== vehicle_id || i.fixed_at || !recent(i.created_at)) return json({ skipped: "no such issue" });
+  if (!(await claim(`issue_added:${issue_id}`))) return json({ skipped: "already sent" });
+  const { data: v } = await db.from("vehicles").select("*").eq("id", vehicle_id).maybeSingle();
+  if (!v) return json({ skipped: "no car" });
+  const { data: people } = await db.from("profiles").select("id").eq("issue_alerts", true);
+  const sold = v.status === "in_prep";
+  return json(await send({
+    title: `${ISSUE_LABEL[i.kind] ?? "⚠️ Issue"}: ${carOf(v)}`,
+    body: [plateOf(v), i.note, sold ? `sold${v.delivery_date ? ` · delivery ${v.delivery_date}` : ""}` : "stock",
+      `noted by ${await nameOf(i.created_by)}`].filter(Boolean).join(" · "),
+    url: "./?tab=issues",
+    tag: `issue-${issue_id}`,
+  }, { onlyUsers: (people ?? []).map((p) => p.id as string), exceptUser: i.created_by ?? undefined }));
+}
+
+async function polishRequested(vehicle_id: string) {
+  const { data: v } = await db.from("vehicles").select("*").eq("id", vehicle_id).maybeSingle();
+  if (!v || v.status === "delivered" || !(v.services ?? []).includes("polish") || v.polish_state === "done"
+      || !recent(v.updated_at ?? v.created_at)) return json({ skipped: "no such change" });
+  if (!(await claim(`polish_requested:${vehicle_id}:${v.updated_at ?? v.created_at}`))) return json({ skipped: "already sent" });
+  const { data: people } = await db.from("profiles").select("id").contains("services", ["polish"]);
+  return json(await send({
+    title: `✨ Polish: ${carOf(v)}`,
+    body: [plateOf(v), v.polish_note, v.status === "in_prep" && v.delivery_date ? `sold · delivery ${v.delivery_date}` : ""]
+      .filter(Boolean).join(" · "),
+    url: "./?tab=polish",
+    tag: `polish-${v.id}`,
+  }, { onlyUsers: (people ?? []).map((p) => p.id as string) }));
+}
+
+async function polishSuggested(vehicle_id: string) {
+  const { data: v } = await db.from("vehicles").select("*").eq("id", vehicle_id).maybeSingle();
+  if (!v || !v.polish_suggested_at || !recent(v.polish_suggested_at)) return json({ skipped: "no suggestion" });
+  if (!(await claim(`polish_suggested:${vehicle_id}:${v.polish_suggested_at}`))) return json({ skipped: "already sent" });
+  const { data: people } = await db.from("profiles").select("id").eq("can_testdrive", true);
+  const who = await nameOf(v.polish_suggested_by);
+  return json(await send({
+    title: `✨ ${who} suggests a polish: ${carOf(v)}`,
+    body: [plateOf(v), v.polish_suggest_note, "approve it on the car"].filter(Boolean).join(" · "),
+    url: "./?tab=stock",
+    tag: `polish-suggest-${v.id}`,
+  }, { onlyUsers: (people ?? []).map((p) => p.id as string), exceptUser: v.polish_suggested_by ?? undefined }));
+}
+
+// 8am: open issues for the "issue alerts" people (Bart)
+async function morningIssues(date: string) {
+  const { data: people } = await db.from("profiles").select("id").eq("issue_alerts", true);
+  if (!people?.length) return null;
+  const { data: issues } = await db.from("vehicle_issues").select("kind, vehicle_id").is("fixed_at", null);
+  if (!issues?.length) return null;
+  const { data: cars } = await db.from("vehicles").select("id, status, delivery_date")
+    .in("id", [...new Set(issues.map((i) => i.vehicle_id))]);
+  const byId = new Map((cars ?? []).map((c) => [c.id, c]));
+  const open = issues.filter((i) => byId.get(i.vehicle_id) && byId.get(i.vehicle_id)!.status !== "delivered");
+  if (!open.length) return null;
+  const weekEnd = new Date(Date.parse(`${date}T00:00:00Z`) + 7 * 864e5).toISOString().slice(0, 10);
+  const soon = open.filter((i) => { const c = byId.get(i.vehicle_id)!; return c.status === "in_prep" && c.delivery_date && c.delivery_date <= weekEnd; });
+  const mats = open.filter((i) => i.kind === "mats").length;
+  return send({
+    title: `🛠 ${open.length} open issue${open.length === 1 ? "" : "s"}`,
+    body: [soon.length && `${soon.length} on cars going out this week`, mats && `${mats} need mats`].filter(Boolean).join(" · ") || "See the Issues list",
+    url: "./?tab=issues",
+    tag: `issues-${date}`,
+  }, { onlyUsers: people.map((p) => p.id as string) });
+}
+
 async function morning() {
   const { date, hour } = dublinNow();
   if (hour !== 8) return json({ skipped: `it's ${hour}:00 in Dublin` });
   if (!(await claim(`morning:${date}`))) return json({ skipped: "already sent today" });
+  await morningIssues(date).catch((err) => console.error("morning issues failed", (err as Error).message));
   const { data: cars } = await db.from("vehicles").select("*").eq("status", "in_prep");
   const sold = cars ?? [];
   const today = sold.filter((v) => v.delivery_date === date)
@@ -197,7 +276,7 @@ Deno.serve(async (req) => {
   if (req.headers.get("x-m6-notify-secret") !== expectedSecret) {
     return json({ error: "unauthorized" }, 401);
   }
-  const { vehicle_id, event = "new_stock" } = await req.json().catch(() => ({}));
+  const { vehicle_id, issue_id, event = "new_stock" } = await req.json().catch(() => ({}));
   if (event === "morning") return morning();
   if (!vehicle_id) return json({ error: "bad request" }, 400);
   if (event === "new_stock") return newStock(vehicle_id);
@@ -205,5 +284,8 @@ Deno.serve(async (req) => {
   if (event === "loan_returned") return loanReturned(vehicle_id);
   if (event === "viewing_booked") return viewingBooked(vehicle_id);
   if (event === "refresh_doing" || event === "refresh_done") return refresh(vehicle_id, event);
+  if (event === "issue_added") return issueAdded(vehicle_id, issue_id);
+  if (event === "polish_requested") return polishRequested(vehicle_id);
+  if (event === "polish_suggested") return polishSuggested(vehicle_id);
   return json({ error: "unknown event" }, 400);
 });
