@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '117';
+const APP_VERSION = '118';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -874,6 +874,25 @@ function serviceHTML(v, key) {
   </button>`;
 }
 
+// The valet team's own jobs, like the sold-cars person's Start prep: a big
+// "▶ Start Full Valet", then a green "✓ Finish Full Valet"; once done it's the
+// small green bubble (tap twice to undo). Two jobs → two buttons, one under the
+// other. Jobs that are someone else's, or not asked for, keep the small bubble.
+function myJobsHTML(v) {
+  const keys = SERVICES.map(s => s.key).filter(k => myServiceKeys().includes(k))
+    // Jobs the car wasn't asked for: only managers can add them (032_*.sql)
+    .filter(k => !isExtra(v, k) || (isAdmin() && v.status !== 'delivered'));
+  const big = k => v.status !== 'delivered' && !isExtra(v, k) && !jobOwner(v, k) && v[`${k}_state`] !== 'done';
+  const bigHTML = keys.filter(big).map(k => {
+    const label = SERVICE[k].label;
+    return v[`${k}_state`] === 'doing'
+      ? `<div class="ready-big"><button type="button" class="btn small finish" data-act="svc" data-key="${k}" title="${esc(`${label} — tap when finished`)}">${ICON.check} Finish ${esc(label)}</button></div>`
+      : `<div class="ready-big"><button type="button" class="btn small primary" data-act="svc" data-key="${k}" title="${esc(`${label} — tap to start`)}">▶ Start ${esc(label)}</button></div>`;
+  }).join('');
+  const small = keys.filter(k => !big(k));
+  return bigHTML + (small.length ? `<div class="services">${small.map(k => serviceHTML(v, k)).join('')}</div>` : '');
+}
+
 function detailRow(label, value, html = null) {
   return clean(value) ? `<div><dt>${label}</dt><dd>${html ?? esc(value)}</dd></div>` : '';
 }
@@ -1231,12 +1250,7 @@ function cardHTML(v) {
     ${clean(v.notes) ? `<div class="notes">${esc(v.notes)}</div>` : ''}
     ${issuesHTML(v)}
     ${workLogHTML(v)}
-    ${myServiceKeys().length ? `<div class="services">${SERVICES
-      // Only the viewer's own jobs (see myServiceKeys); extras faded — delivered cars show what was done
-      .filter(s => myServiceKeys().includes(s.key))
-      // Jobs the car wasn't asked for: only managers can add them (032_*.sql)
-      .filter(s => !isExtra(v, s.key) || (isAdmin() && v.status !== 'delivered'))
-      .map(s => serviceHTML(v, s.key)).join('')}</div>
+    ${myServiceKeys().length ? `${myJobsHTML(v)}
     ${notNeededHTML(v)}
     ${otherJobsHTML(v)}` : soldPersonOnly() && v.status !== 'delivered'
       // not sold yet: the same button, faded — nothing to start until it's sold
