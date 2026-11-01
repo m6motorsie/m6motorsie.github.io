@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '116';
+const APP_VERSION = '117';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -580,8 +580,11 @@ const seesSalesSide = () => salesManager() || canManageTeam();
 
 function renderAll() {
   document.body.classList.toggle('is-admin', isAdmin());
-  // Training videos are for the people working on the cars, not the sales team
-  $('#trainingBtn').hidden = canTestdrive();
+  // Training videos: the valet team (a cleaning job ticked), the sold-cars person and the system admin
+  $('#trainingBtn').hidden = !(canManageTeam() || canReady() || CLEANING.some(s => (S.me?.services ?? []).includes(s.key)));
+  // Overview: the sales managers only (Alan, Eanna, Derek)
+  $('#overviewBtn').hidden = !salesManager();
+  if (S.view === 'overview' && !salesManager()) setView('main');
   $('#teamBtn').hidden = !canManageTeam();
   renderOnline();
   if (S.view === 'team' && !canManageTeam()) setView('main');
@@ -709,6 +712,12 @@ function renderTabs() {
   stockBadge.hidden = !soldInStock;
   stockBadge.textContent = soldInStock;
   stockBadge.title = `${soldInStock} sold ${soldInStock === 1 ? 'car' : 'cars'} waiting in Stock`;
+  // Red badge on Issues: open issues on sold cars (to fix before they go out)
+  const soldIssues = noIssues ? 0 : openIssueRows().filter(r => isSold(r.v)).length;
+  const issuesBadge = $('[data-tab=issues] .today');
+  issuesBadge.hidden = !soldIssues;
+  issuesBadge.textContent = soldIssues;
+  issuesBadge.title = `${soldIssues} on sold cars`;
   $('#purgeBtn').hidden = S.tab !== 'delivered';
   const print = $('#printBtn');
   print.hidden = !(isAdmin() || (S.tab === 'issues' && seesIssuesList())) || !['sold', 'dent', 'issues'].includes(S.tab);
@@ -3171,30 +3180,18 @@ function renderReport() {
       <div class="presets" id="presets">${REPORT_PRESETS.map(([k, label]) =>
         `<button type="button" class="btn small" data-preset="${k}">${label}</button>`).join('')}</div>
       <div class="report-actions">
-        <button type="button" class="btn primary" id="reportPrintBtn">Print / Save PDF</button>
         <button type="button" class="btn" id="csvSummaryBtn">Download summary (Excel)</button>
         <button type="button" class="btn" id="csvListBtn">Download full list (Excel)</button>
-        <button type="button" class="btn" id="reportHistoryBtn">Completion history</button>
       </div>
     </div>
-    <div id="reportBody"><p class="empty">Loading…</p></div>
-    <div id="reportHistory" class="no-print" hidden></div>`;
+    <div id="reportBody"><p class="empty">Loading…</p></div>`;
 
   $('#presets').addEventListener('click', e => {
     const b = e.target.closest('[data-preset]');
     if (b) setReportPreset(b.dataset.preset);
   });
-  // Lists are closed on screen; open them all for the printout, then close again
-  $('#reportPrintBtn').addEventListener('click', () => {
-    const closed = $$('#reportBody details:not([open])');
-    closed.forEach(d => { d.open = true; });
-    const done = () => { closed.forEach(d => { d.open = false; }); window.removeEventListener('afterprint', done); };
-    window.addEventListener('afterprint', done);
-    window.print();
-  });
   $('#csvSummaryBtn').addEventListener('click', exportSummaryCsv);
   $('#csvListBtn').addEventListener('click', exportListCsv);
-  $('#reportHistoryBtn').addEventListener('click', loadReportHistory);
 
   $('#reportBody').addEventListener('click', e => {
     const btn = e.target.closest('[data-clear-person]');
@@ -3208,7 +3205,6 @@ function setReportPreset(preset) {
   report.preset = preset;
   [report.start, report.end] = presetRange(preset);
   loadReport();
-  if ($('#reportHistory') && !$('#reportHistory').hidden) loadReportHistory(false);
 }
 
 async function loadReport() {
@@ -3228,32 +3224,6 @@ async function loadReport() {
   drawReport();
 }
 
-async function loadReportHistory(toggle = true) {
-  const panel = $('#reportHistory');
-  const button = $('#reportHistoryBtn');
-  if (!panel || !button) return;
-  if (toggle && !panel.hidden) { panel.hidden = true; button.textContent = 'Completion history'; return; }
-  panel.hidden = false;
-  button.textContent = 'Hide history';
-  panel.innerHTML = '<div class="panel"><p class="empty">Loading history…</p></div>';
-  const { data, error } = await sb.from('service_completion_audit')
-    .select('action, service, user_name, plate, vehicle, completed_at, changed_at, changed_by_name')
-    .in('service', PAY_SERVICES.map(s => s.key))
-    .gte('changed_at', report.start.toISOString()).lt('changed_at', report.end.toISOString())
-    .order('changed_at', { ascending: false }).limit(200);
-  if (error) {
-    panel.innerHTML = `<div class="panel"><p class="empty">${esc(errorText(error))}. Apply supabase/042_service_completion_audit.sql.</p></div>`;
-    return;
-  }
-  const rows = data ?? [];
-  panel.innerHTML = `<div class="panel"><h2>Completion changes</h2>
-    <p class="muted">Up to 200 changes in this period, including records that were removed or reverted.</p>
-    ${rows.length ? `<div class="table-scroll"><table class="compact"><thead><tr><th>Change</th><th>Changed</th><th>Credited to</th><th>Plate</th><th>Car</th><th>Service date</th><th>Changed by</th></tr></thead><tbody>${rows.map(r => `<tr>
-      <td>${r.action === 'removed' ? 'Removed' : 'Completed'}</td><td>${esc(fmtDate(r.changed_at))}</td><td>${esc(r.user_name)}</td><td class="mono">${esc(r.plate)}</td><td>${esc(r.vehicle)}</td><td>${esc(fmtDate(r.completed_at))}</td><td>${esc(r.changed_by_name || 'System')}</td>
-    </tr>`).join('')}</tbody></table></div>` : '<p class="empty">No completion changes in this period.</p>'}
-  </div>`;
-}
-
 // 🗑 on a person: delete their Full Valet records for the period on screen
 // (admins only, also in the database — 022_*.sql). No undo, so two taps.
 async function clearPersonRecords(id, btn) {
@@ -3269,7 +3239,6 @@ async function clearPersonRecords(id, btn) {
   if (!data.length) return toast('Nothing was deleted — run 022_admin_clear_pay_records.sql in Supabase first.', { error: true });
   toast(`Deleted ${plural(data.length, 'record')} for ${name}`);
   loadReport();
-  if ($('#reportHistory') && !$('#reportHistory').hidden) loadReportHistory(false);
 }
 
 // The Full Valet team = people with Full Valet ticked as their job on the Team
@@ -3760,7 +3729,7 @@ const HELP = [
       <li>The card shows days on site (amber after 14, red after 30) and the result against the allowance.</li>
       <li>Changed your mind? A manager taps <b>Keep for retail → Stock</b>.</li></ul>
     <p>Only managers and the sales team see the Trade tab — it has prices.</p>` },
-  { id: 'overview', title: 'Overview (managers)', tabs: [], admin: true, body: `
+  { id: 'overview', title: 'Overview (managers)', tabs: [], admin: true, sales: true, body: `
     <p>The <b>four-squares icon</b> at the top opens the Overview: the whole company at a glance — stock, sold cars, what goes out today, viewings, cars at the bodyshop or on loan, what needs attention, how old the stock is and who is working on what right now.</p>
     <p>Everything is live from the app. Tap any number or line to open that list.</p>` },
   { id: 'phone', title: 'Phone tips', tabs: [], body: `
@@ -3772,7 +3741,7 @@ const HELP = [
 ];
 
 function openHelp() {
-  const topics = HELP.filter(h => !h.admin || isAdmin());
+  const topics = HELP.filter(h => (!h.admin || isAdmin()) && (!h.sales || salesManager()));
   const first = S.view === 'supplies' ? 'supplies' : (topics.find(h => h.tabs.includes(S.tab))?.id ?? 'jobs');
   openSheet(`${sheetHead('How to use the app')}
     <div class="help">${topics.map(h => `<details ${h.id === first ? 'open' : ''}>
