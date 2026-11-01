@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '115';
+const APP_VERSION = '116';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -3130,6 +3130,7 @@ const REPORT_PRESETS = [
   ['this-month', 'This month'],
   ['this-week', 'This week'],
   ['last-week', 'Last week'],
+  ['last-month', 'Last month'],
 ];
 const report = { preset: 'this-month', start: null, end: null, rows: [] };
 // Only Full Valet is paid per car, so the report counts only that service
