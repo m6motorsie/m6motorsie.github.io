@@ -795,3 +795,15 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 .trade-offer.best { border-color: #16a34a; }
 .btn.trade-btn { border-color: #0e7490; color: #0e7490; }
 @media (prefers-color-scheme: dark) { .btn.trade-btn { color: #67d3e6; } }
+
+/* Polish: chip, buttons and the queue number; issue lines */
+.chip.polish { background: #fef3c7; border-color: #f59e0b; color: #92400e; font-weight: 700; }
+.btn.polish-btn { border-color: #d97706; color: #b45309; }
+.btn.polish-btn.on { background: #d97706; border-color: #d97706; color: #fff; }
+@media (prefers-color-scheme: dark) {
+  .chip.polish { background: #3a2a0a; color: #fcd34d; }
+  .btn.polish-btn:not(.on) { color: #fbbf24; }
+}
+.queue-no { display: inline-block; min-width: 30px; font-weight: 800; font-size: 15px; color: var(--muted); }
+.polish-line .svc { min-width: 150px; }
+.issue-line .dent-fix small { font-weight: 400; }

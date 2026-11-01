@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '114';
+const APP_VERSION = '115';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -41,7 +41,7 @@ const COLOUR_HEX = Object.fromEntries(COLOURS.map(([n, h]) => [n.toLowerCase(), 
 
 // Tabs are views, not the database status (see tabOf): the DB status
 // 'in_prep' means "sold, not delivered yet".
-const TAB_TITLE = { viewing: 'Viewings', stock: 'Stock', in_prep: 'In prep', sold: 'Deliveries', bodyshop: 'Bodyshop', dent: 'Dent', loan: 'Loan', trade: 'Trade', delivered: 'Delivered' };
+const TAB_TITLE = { viewing: 'Viewings', stock: 'Stock', in_prep: 'In prep', polish: 'Polish', sold: 'Deliveries', bodyshop: 'Bodyshop', dent: 'Dent', issues: 'Issues', loan: 'Loan', trade: 'Trade', delivered: 'Delivered' };
 
 const ICON = {
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
@@ -680,6 +680,15 @@ function renderTabs() {
   $('.tabs [data-tab=in_prep]').hidden = noPrepTab;
   if (S.tab === 'in_prep' && noPrepTab) S.tab = 'sold';
   if (S.tab === 'viewing' && !canSeeViewings()) S.tab = 'sold';
+  // Issues list: managers and whoever gets issue alerts (Bart); Polish list: the polish team + sales managers
+  const noIssues = !seesIssuesList() || !S.issuesReady;
+  $('.tabs [data-tab=issues]').hidden = noIssues;
+  if (S.tab === 'issues' && noIssues) S.tab = 'sold';
+  counts.issues = openIssueRows().length;
+  const noPolish = !seesPolishList();
+  $('.tabs [data-tab=polish]').hidden = noPolish;
+  if (S.tab === 'polish' && noPolish) S.tab = 'sold';
+  counts.polish = polishQueue().length;
   const noTrade = !canTrade() || !S.tradeReady;
   $('.tabs [data-tab=trade]').hidden = noTrade;
   if (S.tab === 'trade' && noTrade) S.tab = 'sold';
@@ -702,7 +711,7 @@ function renderTabs() {
   stockBadge.title = `${soldInStock} sold ${soldInStock === 1 ? 'car' : 'cars'} waiting in Stock`;
   $('#purgeBtn').hidden = S.tab !== 'delivered';
   const print = $('#printBtn');
-  print.hidden = !isAdmin() || !['sold', 'dent'].includes(S.tab);
+  print.hidden = !(isAdmin() || (S.tab === 'issues' && seesIssuesList())) || !['sold', 'dent', 'issues'].includes(S.tab);
   print.textContent = `🖨 Print ${TAB_TITLE[S.tab]?.toLowerCase()} list`;
   const fab = $('#fab');
   // Adding stock is admin-only (also enforced in the database); trade-ins: managers + sales
@@ -792,6 +801,7 @@ const isExtra = (v, key) => !v.services.includes(key) && v[`${key}_state`] === '
 
 // Problems noted on a car until someone marks them fixed
 const ISSUE_KINDS = {
+  mats:     { label: 'Mats missing',          icon: '🟫', hint: 'e.g. front and rear mats' },
   wheels:   { label: 'Wheels / alloys',       icon: '🛞', hint: 'e.g. front left alloy scuffed' },
   interior: { label: 'Missing interior part', icon: '🧩', hint: 'e.g. parcel shelf, boot floor cover' },
   scratch:  { label: 'Scratch / paint',       icon: '🎨', hint: 'e.g. scratch on rear bumper' },
@@ -823,7 +833,8 @@ function issuesHTML(v) {
 function notNeededHTML(v) {
   if (isAdmin() || v.status === 'delivered') return '';
   // (a job only some cars get, like Body kit, isn't worth a line on every other car)
-  const skip = myServiceKeys().filter(k => SERVICE[k] && !SERVICE[k].optional && isExtra(v, k)).map(k => SERVICE[k].label);
+  const skip = myServiceKeys().filter(k => SERVICE[k] && !SERVICE[k].optional && isExtra(v, k) && !(k === 'polish' && 'polish_suggested_at' in v))
+    .map(k => SERVICE[k].label);
   return skip.length ? `<div class="other-jobs">Not needed on this car: ${esc(skip.join(', '))}</div>` : '';
 }
 
@@ -1116,6 +1127,7 @@ function cardHTML(v) {
     const today = dayDiff(inputDate(new Date(v.viewing_at))) <= 0;
     chips.push(`<span class="chip viewing${today ? ' soon' : ''}">👀 VIEWING · ${esc(viewingLabel(v))}${v.viewing_by ? ` · ${esc(nameOf(v.viewing_by))}` : ''}</span>`);
   }
+  if (polishSuggested(v)) chips.push(`<span class="chip polish">✨ ${esc(nameOf(v.polish_suggested_by))} suggests polish${clean(v.polish_suggest_note) ? ` · ${esc(v.polish_suggest_note)}` : ''}</span>`);
   if (inDent(v)) chips.push(`<span class="chip hold">DENT${v.dent_date ? ` · ${esc(dayName(v.dent_date))}` : ''}</span>`);
   if (sold && tab !== 'sold') chips.push('<span class="chip sold">SOLD</span>');
   if (v.urgent && v.status !== 'delivered') chips.push('<span class="chip urgent">URGENT</span>');
@@ -1141,6 +1153,7 @@ function cardHTML(v) {
     tab === 'loan' ? detailRow('Phone', phone, `<a href="tel:${esc(phone.replace(/[^\d+]/g, ''))}">${esc(phone)}</a>`) : '',
     tab === 'loan' ? detailRow('Out since', v.loan_since && fmtDate(v.loan_since)) : '',
     inDent(v) ? detailRow('Dent', v.dent_notes || 'On the dent list') : '',
+    v.services.includes('polish') && v.polish_state !== 'done' ? detailRow('Polish', v.polish_note) : '',
     tab === 'bodyshop' ? detailRow('Work', v.body_notes) : '',
     tab === 'bodyshop' ? detailRow('Bodyshop', v.body_place) : '',
     tab === 'bodyshop' ? detailRow('Since', v.body_since && fmtDate(v.body_since)) : '',
@@ -1181,6 +1194,12 @@ function cardHTML(v) {
   if ('testdrive_since' in v && canTestdrive() && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)
       && (!sold || onTestdrive(v))) {  // (after 028_*.sql)
     actions = (onTestdrive(v) ? b('testback', `${ICON.check} Back from test drive`, 'testdrive-btn on') : b('testdrive', '🚗 Test drive', 'ghost testdrive-btn')) + actions;
+  }
+  // Polish: sales ask for it; the polish team suggests it; sales answer a suggestion
+  if ('polish_suggested_at' in v && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab) && !v.services.includes('polish')) {  // (after 044_*.sql)
+    if (salesManager() && polishSuggested(v)) actions = b('polishno', '✕ No polish') + b('polishyes', '✨ Approve polish', 'polish-btn on') + actions;
+    else if (salesManager()) actions += b('askpolish', '✨ Polish', 'ghost polish-btn');
+    else if (doesPolish() && !polishSuggested(v)) actions += b('suggestpolish', '✨ Suggest polish', 'ghost polish-btn');
   }
   // Anyone on staff can note a problem (wheels, missing part…)
   if (S.workLogReady && worksOnCars() && v.status !== 'delivered') actions = b('worklog', '🔧 Log', 'ghost log-btn') + actions;
@@ -1312,6 +1331,8 @@ function renderList() {
 // tab's name, so you don't have to go looking tab by tab.
 function listHTML(tab) {
   if (tab === 'trade') return tradeHTML();
+  if (tab === 'issues') return issuesListHTML();
+  if (tab === 'polish') return polishListHTML();
   const current = S.tab;
   try {
     S.tab = tab;
@@ -1323,7 +1344,7 @@ function listHTML(tab) {
 
     const shown = new Set(list.map(v => v.id));
     const elsewhere = $$('.tabs button:not([hidden])').map(b => b.dataset.tab)
-      .filter(t => t !== tab && t !== 'dent' && t !== 'viewing' && t !== 'trade')  // lists only; their cars live in another tab
+      .filter(t => t !== tab && !['dent', 'viewing', 'trade', 'issues', 'polish'].includes(t))  // lists only; their cars live in another tab
       .map(t => { S.tab = t; return [t, visibleVehicles().filter(v => !shown.has(v.id))]; })
       .filter(([, cars]) => cars.length);
     if (!here && !elsewhere.length) return '<p class="empty">No vehicles match your search.</p>';
@@ -1451,6 +1472,7 @@ function printDentList() {
 }
 
 function printCurrentList() {
+  if (S.tab === 'issues' && seesIssuesList()) return printIssuesList();
   if (!isAdmin()) return;
   ({ sold: printSoldList, dent: printDentList })[S.tab]?.();
 }
@@ -1469,6 +1491,7 @@ async function onListClick(e) {
   if (!btn) return;
   const tradeCard = btn.closest('[data-trade]');
   if (tradeCard) return onTradeAction(btn, tradeCard.dataset.trade);
+  if (btn.dataset.act === 'issuefix') return fixIssue(Number(btn.dataset.issue), btn);
   const id = btn.closest('[data-id]')?.dataset.id;
   const v = S.vehicles.get(id);
   if (!v) return;
@@ -1487,6 +1510,10 @@ async function onListClick(e) {
   if (act === 'dentdone') return canFinishDent() && dentDone(v);
   if (act === 'dentphoto') return openPhotoPath(btn.dataset.path, [v.reg_ie, v.reg_imp].filter(Boolean).join(' / '));
 
+  if (act === 'askpolish') return salesManager() && openPolishSheet(v, 'ask');
+  if (act === 'suggestpolish') return doesPolish() && openPolishSheet(v, 'suggest');
+  if (act === 'polishyes') return salesManager() && approvePolish(v);
+  if (act === 'polishno') return salesManager() && confirmTap(btn, 'Tap again — no polish') && updateVehicle(v.id, { polish_suggested_at: null }).then(renderAll, err => toast(errorText(err), { error: true }));
   if (act === 'viewing') return canTestdrive() && openViewingForm(v);
   if (act === 'viewdone') return canTestdrive() && viewingsDone([v]);
   if (act === 'testdrive' || act === 'testback') return canTestdrive() && setTestdrive(v, act === 'testdrive');
@@ -1763,7 +1790,7 @@ function openIssueSheet(v) {
       <div class="section-label">Add an issue</div>
       <div class="pills">${Object.entries(ISSUE_KINDS).map(([k, x], n) =>
         `<label class="pill"><input type="radio" name="kind" value="${k}" ${n === 0 ? 'checked' : ''}><span>${x.icon} ${esc(x.label)}</span></label>`).join('')}</div>
-      <label>Details<input name="note" autocomplete="off" placeholder="${esc(ISSUE_KINDS.wheels.hint)}"></label>
+      <label>Details<input name="note" autocomplete="off" placeholder="${esc(Object.values(ISSUE_KINDS)[0].hint)}"></label>
       <p class="form-error" id="issueError" hidden></p>
       <div class="sheet-actions">
         <button type="button" class="btn ghost" data-close>Close</button>
@@ -2397,6 +2424,8 @@ function personTags(p) {
   if (p.can_testdrive) tags.push('<span class="tag sold">🚗 Sales</span>');
   if (p.does_refresh) tags.push('<span class="tag alerts">🧽 Refresh</span>');
   if (p.loan_alerts) tags.push('<span class="tag alerts">🔔 Loan returns</span>');
+  if (p.issue_alerts) tags.push('<span class="tag alerts">🔔 Issues</span>');
+  if (p.pay_full) tags.push('<span class="tag job">💶 Paid per Full Valet</span>');
   if (p.show_count) tags.push('<span class="tag">🏁 Counter</span>');
   if (!jobs.length && !p.handles_sold) tags.push('<span class="tag muted">Overview only</span>');
   return tags.join('');
@@ -2461,6 +2490,12 @@ function openPerson(id) {
     ${'loan_alerts' in p ? `<div class="section-label">Loans</div>
     ${sw('data-flag="loan_alerts"', p.loan_alerts, '🔔 Back from loan notifications', 'A notification when a car comes back from loan, to get it ready again.')}` : ''}
 
+    ${'issue_alerts' in p ? `<div class="section-label">Issues</div>
+    ${sw('data-flag="issue_alerts"', p.issue_alerts, '🔔 Issue alerts', 'A notification when someone notes an issue (mats, parts, wheels…), the open issues at 8am, and the Issues list.')}` : ''}
+
+    ${'pay_full' in p ? `<div class="section-label">Pay</div>
+    ${sw('data-flag="pay_full"', p.pay_full, '💶 Paid per Full Valet', 'Shows on the pay report. Leave off for someone who does a Full Valet now and then without being paid for it.')}` : ''}
+
     <div class="section-label">Dent</div>
     ${sw('data-flag="can_dent"', p.can_dent, 'Can use Dent', 'Add cars to the Dent list and edit what’s written.')}
     ${'can_finish_dent' in p ? sw('data-flag="can_finish_dent"', p.can_finish_dent, '✅ Dent done', 'Signs dents off: the Done button that takes a car off the Dent list.') : ''}
@@ -2502,6 +2537,162 @@ async function savePerson(id, input) {
   if (patch.display_name) $('.sheet-head h2', box).textContent = patch.display_name;
   $('.person-saved', box).textContent = '✓ Saved';
   renderAll();
+}
+
+// ---------------------------------------------------------------------
+// Issues list (Bart): every open problem on the cars in one place — mats,
+// interior parts, wheels, scratches — most urgent first: sold cars by
+// delivery day, then the oldest. "Fixed" goes on the car's work log.
+// ---------------------------------------------------------------------
+const seesIssuesList = () => isAdmin() || !!S.me?.issue_alerts;
+const ISSUE_ORDER = ['mats', 'interior', 'wheels', 'scratch', 'other'];
+function openIssueRows() {
+  const rows = [];
+  for (const [vid, list] of S.issues) {
+    const v = S.vehicles.get(vid);
+    if (!v || v.status === 'delivered') continue;
+    for (const i of list) rows.push({ i, v });
+  }
+  const due = r => (isSold(r.v) ? r.v.delivery_date ?? '9998-12-31' : '9999-12-31');
+  return rows.sort((a, b) => due(a).localeCompare(due(b)) || new Date(a.i.created_at) - new Date(b.i.created_at));
+}
+
+function issuesListHTML() {
+  if (!S.issuesReady) return '<p class="empty">Issues aren’t set up yet (run 024_vehicle_issues.sql).</p>';
+  const q = norm(S.search);
+  const rows = openIssueRows().filter(({ i, v }) => !q || [v.reg_ie, v.reg_imp, v.make, v.model, i.note, ISSUE_KINDS[i.kind]?.label].some(f => norm(f).includes(q)));
+  if (!rows.length) return `<p class="empty">${q ? 'No issues match your search.' : 'No open issues. 👍'}</p>`;
+  const soonDays = 1;
+  const row = ({ i, v }) => {
+    const hot = isSold(v) && v.delivery_date && dayDiff(v.delivery_date) <= soonDays;
+    const days = daysSince(i.created_at);
+    return `<div class="dent-row issue-line${hot ? ' urgent' : ''}" data-id="${v.id}">
+      <div class="dent-car">${plateHTML(v)}
+        <span class="vehicle-name">${esc(carName(v))} ${colourHTML(v.color)}</span>
+        <span class="dent-where">${esc(whereLabel(v))}</span>
+      </div>
+      <div class="dent-fix"><strong>${esc(clean(i.note) || ISSUE_KINDS[i.kind]?.label || 'Issue')}</strong>
+        <small class="muted"> · ${esc(nameOf(i.created_by))} · ${days === 0 ? 'today' : `${days} ${days === 1 ? 'day' : 'days'} ago`}</small></div>
+      <div class="dent-actions"><button class="btn small accent" data-act="issuefix" data-issue="${i.id}">${ICON.check} Fixed</button></div>
+    </div>`;
+  };
+  return ISSUE_ORDER.map(k => {
+    const items = rows.filter(r => (ISSUE_KINDS[r.i.kind] ? r.i.kind : 'other') === k);
+    if (!items.length) return '';
+    const x = ISSUE_KINDS[k];
+    return `<section class="deliv-group dent-group">
+      <h3>${x.icon} ${esc(x.label)} <span class="count">${items.length}</span></h3>
+      ${items.map(row).join('')}
+    </section>`;
+  }).join('');
+}
+
+async function fixIssue(id, btn) {
+  const { error } = await sb.from('vehicle_issues').update({ fixed_at: new Date().toISOString() }).eq('id', id);
+  if (error) return toast(errorText(error), { error: true });
+  await Promise.all([loadIssues(), loadWorkLog()]);
+  renderAll();
+  toast('Marked as fixed — on the car’s log', { action: { label: 'Undo', run: async () => {
+    await sb.from('vehicle_issues').update({ fixed_at: null }).eq('id', id);
+    await Promise.all([loadIssues(), loadWorkLog()]); renderAll();
+  } } });
+}
+
+function printIssuesList() {
+  const rows = openIssueRows();
+  if (!rows.length) return toast('No open issues.');
+  const out = [];
+  for (const k of ISSUE_ORDER) {
+    const items = rows.filter(r => (ISSUE_KINDS[r.i.kind] ? r.i.kind : 'other') === k);
+    if (!items.length) continue;
+    out.push({ group: `${ISSUE_KINDS[k].label} (${items.length})` });
+    for (const { i, v } of items) out.push({ cells: [
+      { html: plateCell(v), cls: 'plate-cell' },
+      { html: carCell(v) },
+      { html: esc(clean(i.note) || '—'), cls: 'notes-cell' },
+      { html: isSold(v) ? `<strong>SOLD</strong><br>${esc(deliveryLabel(v) || 'No delivery date')}` : esc(whereLabel(v)) },
+      { html: '<span class="tick">☐</span>' },
+    ] });
+  }
+  printDoc({
+    title: 'Issues to fix', summary: plural(rows.length, 'issue'),
+    how: 'Sold cars going out soonest first. Tick ☐ when fixed — then tap “Fixed” in the app.',
+    columns: ['Plate', 'Car', 'What’s wrong', 'Stock / sold', 'Fixed'], rows: out,
+  });
+}
+
+// ---------------------------------------------------------------------
+// Polish (Lucas): the sales team asks for a polish (✨ Polish, with what to
+// polish); the polish team can suggest one they spot in the yard, which sales
+// approve or turn down. The Polish tab is the queue, most urgent first.
+// ---------------------------------------------------------------------
+const doesPolish = () => myServiceKeys().includes('polish');
+const seesPolishList = () => doesPolish() || salesManager() || canManageTeam();
+const polishSuggested = v => !!v.polish_suggested_at && v.status !== 'delivered' && !v.services.includes('polish');
+function polishQueue() {
+  const due = v => (isSold(v) ? v.delivery_date ?? '9998-12-31' : '9999-12-31');
+  return [...S.vehicles.values()]
+    .filter(v => v.status !== 'delivered' && v.services.includes('polish') && v.polish_state !== 'done')
+    .sort((a, b) => (b.polish_state === 'doing') - (a.polish_state === 'doing') || due(a).localeCompare(due(b))
+      || (b.urgent - a.urgent) || new Date(a.created_at) - new Date(b.created_at));
+}
+
+function polishListHTML() {
+  const q = norm(S.search);
+  const match = v => !q || [v.reg_ie, v.reg_imp, v.make, v.model, v.polish_note].some(f => norm(f).includes(q));
+  const queue = polishQueue().filter(match);
+  const suggested = [...S.vehicles.values()].filter(v => polishSuggested(v) && match(v));
+  const row = (v, n) => `<div class="dent-row polish-line${isSold(v) && v.delivery_date && dayDiff(v.delivery_date) <= 1 ? ' urgent' : ''}" data-id="${v.id}">
+      <div class="dent-car">${n ? `<span class="queue-no">#${n}</span>` : ''}${plateHTML(v)}
+        <span class="vehicle-name">${esc(carName(v))} ${colourHTML(v.color)}</span>
+        <span class="dent-where">${esc(whereLabel(v))}</span>
+      </div>
+      <div class="dent-fix">${n ? esc(v.polish_note || 'Polish') : `<strong>${esc(nameOf(v.polish_suggested_by))} suggests:</strong> ${esc(v.polish_suggest_note || 'polish')}`}</div>
+      <div class="dent-actions">${n ? (doesPolish() || isAdmin() ? serviceHTML(v, 'polish') : '')
+        : salesManager() ? `<button class="btn small ghost" data-act="polishno">✕ No</button><button class="btn small polish-btn on" data-act="polishyes">✨ Approve</button>` : '<span class="muted">Waiting for sales</span>'}</div>
+    </div>`;
+  const parts = [];
+  if (queue.length) parts.push(`<section class="deliv-group dent-group"><h3>✨ To polish <span class="count">${queue.length}</span></h3>${queue.map((v, i) => row(v, i + 1)).join('')}</section>`);
+  if (suggested.length) parts.push(`<section class="deliv-group dent-group"><h3>Suggested — waiting for sales <span class="count">${suggested.length}</span></h3>${suggested.map(v => row(v, 0)).join('')}</section>`);
+  return parts.join('') || `<p class="empty">${q ? 'No cars match your search.' : 'Nothing to polish right now. 👍'}</p>`;
+}
+
+// ask: a manager asks for a polish (adds it to the car); suggest: the polish team suggests one
+function openPolishSheet(v, mode) {
+  const ask = mode === 'ask';
+  const sheet = openSheet(`<form class="form" id="polishForm" novalidate>
+    ${sheetHead(ask ? 'Ask for a polish' : 'Suggest a polish')}
+    <div class="hold-car">${plateHTML(v)}<span class="muted">${esc(carName(v))}</span></div>
+    <label>What to polish?<input name="what" autocomplete="off" value="${esc(ask ? v.polish_suggest_note : '')}" placeholder="e.g. bonnet swirls, rear bumper scratches"></label>
+    <p class="hint" style="margin:0">${ask ? 'The car goes on the polish list and the polish team is told.' : 'The sales team is told and approves it (or not).'}</p>
+    <p class="form-error" id="polishError" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">${ask ? '✨ Ask for polish' : '✨ Suggest'}</button>
+    </div>
+  </form>`);
+  const form = $('#polishForm', sheet);
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const what = clean(form.elements.what.value);
+    const patch = ask ? { services: withService(v, 'polish'), polish_note: what }
+      : { polish_suggested_at: new Date().toISOString(), polish_suggest_note: what };
+    try {
+      await updateVehicle(v.id, patch);
+      closeSheet();
+      renderAll();
+      toast(ask ? 'Polish asked for — the polish team has been told' : 'Suggestion sent to the sales team');
+    } catch (err) { const el = $('#polishError', form); el.textContent = errorText(err); el.hidden = false; }
+  };
+}
+
+const withService = (v, key) => SERVICES.map(s => s.key).filter(k => v.services.includes(k) || k === key);
+async function approvePolish(v) {
+  try {
+    await updateVehicle(v.id, { services: withService(v, 'polish'), polish_note: clean(v.polish_suggest_note) });
+    renderAll();
+    toast('Polish approved — on the polish list');
+  } catch (err) { toast(errorText(err), { error: true }); }
 }
 
 // ---------------------------------------------------------------------
@@ -2848,7 +3039,8 @@ function renderOverview() {
     tile(where('bodyshop').length, 'At the bodyshop', 'bodyshop', { sub: lateOut('bodyshop') ? `${lateOut('bodyshop')} overdue` : '' }),
     tile(where('loan').length, 'On loan', 'loan', { sub: lateOut('loan') ? `${lateOut('loan')} overdue` : '' }),
     tile(live.filter(inDent).length, 'On the dent list', 'dent'),
-    tile(issues, 'Open issues', '', { cls: issues ? 'warn' : '' }),
+    tile(issues, 'Open issues', seesIssuesList() && S.issuesReady ? 'issues' : '', { cls: issues ? 'warn' : '' }),
+    tile(polishQueue().length, 'To polish', seesPolishList() ? 'polish' : ''),
     ...(canTrade() && S.tradeReady ? [tile(S.trades.filter(t => t.status === 'in' || t.status === 'sold').length, 'Trade cars on site', 'trade',
       { sub: S.trades.some(t => t.status !== 'in' && !t.paid_at) ? `${S.trades.filter(t => t.status !== 'in' && t.status !== 'retail' && !t.paid_at).length} not paid` : '' })] : []),
   ].join('');
@@ -3083,7 +3275,7 @@ async function clearPersonRecords(id, btn) {
 // screen (Marcelo, Rimmas). They're always listed, even with 0 cars; Full
 // Valets marked by anyone else aren't paid and don't show.
 const payTeam = () => [...S.profiles.values()]
-  .filter(p => PAY_SERVICES.some(s => (p.services ?? []).includes(s.key)));
+  .filter(p => ('pay_full' in p ? p.pay_full : PAY_SERVICES.some(s => (p.services ?? []).includes(s.key))));
 
 // One entry per person of the team: their cars and count per service.
 function reportPeople() {
@@ -3530,12 +3722,16 @@ const HELP = [
   { id: 'testdrive', title: 'Test drives (sales)', tabs: ['stock', 'sold'], body: `
     <p>Sales team: tap <b>🚗 Test drive</b> on a car when it goes out — everyone sees <b>ON TEST DRIVE</b> with your name and the time. No customer details needed.</p>
     <p>When it’s back, tap <b>✓ Back from test drive</b>. The drive is added to the car’s work log by itself.</p>` },
-  { id: 'issues', title: 'Issues (wheels, missing parts…)', tabs: ['stock', 'sold', 'in_prep'], body: `
-    <p>Found a problem on a car? Tap <b>+ Issue</b> on its card, pick what it is (<b>🛞 Wheels / alloys</b>, <b>🧩 Missing interior part</b>, <b>🎨 Scratch / paint</b> or <b>Other</b>) and write the details.</p>
+  { id: 'issues', title: 'Issues (mats, wheels, missing parts…)', tabs: ['stock', 'sold', 'in_prep', 'issues'], body: `
+    <p>Found a problem on a car? Tap <b>+ Issue</b> on its card, pick what it is (<b>🟫 Mats missing</b>, <b>🛞 Wheels / alloys</b>, <b>🧩 Missing interior part</b>, <b>🎨 Scratch / paint</b> or <b>Other</b>) and write the details.</p>
+    <p>The <b>Issues</b> tab lists every open problem by type — sold cars going out soonest first — with <b>✓ Fixed</b> on each line and a print button.</p>
     <p>It shows on the card in orange for everyone until someone taps it and marks it <b>Fixed</b> — then it goes on the car’s work log.</p>` },
   { id: 'worklog', title: 'Work log (what was done)', tabs: ['stock', 'sold', 'in_prep', 'delivered'], body: `
     <p>Did something on a car that isn’t one of the job bubbles (e.g. <i>grille wrapped</i>, <i>diffuser sprayed</i>)? Tap <b>🔧 Log</b> on its card and write it. Your name and the date are added by themselves.</p>
     <p>The card shows the latest entry; tap it to see everything done on that car. Fixed issues are logged automatically.</p>` },
+  { id: 'polish', title: 'Polish', tabs: ['polish', 'stock'], body: `
+    <p>The sales team taps <b>✨ Polish</b> on a car and writes what to polish — it goes on the <b>Polish</b> list and the polish team is told.</p>
+    <p>Polish team: the list is in order — sold cars going out soonest first. Tap <b>▶</b> to start and again when it’s done. See a car that needs it? Tap <b>✨ Suggest polish</b> — the sales team approves it or not.</p>` },
   { id: 'bodykit', title: 'Body kit', tabs: ['stock', 'in_prep', 'sold'], body: `
     <p>A manager ticks <b>Body kit</b> on a car (<b>More → Edit</b>) and writes which kit — it shows on the card as <b>Body kit: …</b>.</p>
     <p>Whoever fits body kits gets the button: <b>▶</b> when you start, tap again when it’s done. The car isn’t ready until the kit is on.</p>` },
