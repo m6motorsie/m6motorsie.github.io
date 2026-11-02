@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '119';
+const APP_VERSION = '120';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1105,8 +1105,36 @@ function viewingHTML(list) {
   return [...groups.values()].map(g => `<section class="deliv-group ${g.cls}">
     <h3>${esc(g.title)} <span class="count">${g.items.length}</span>
       ${g.key === 'today' && past ? `<button type="button" class="link-btn clear-past" data-clear-viewings>✓ Clear past (${past})</button>` : ''}</h3>
-    ${g.items.map(cardHTML).join('')}
+    ${g.items.map(viewingCardHTML).join('')}
   </section>`).join('');
+}
+
+// Viewings tab: a short card — the car, when and who booked it, and the refresh
+// (big Start refresh / Refreshed for the refresh team; edit / Done for the sales team)
+function viewingCardHTML(v) {
+  const url = photoSrc(v.photo_path);
+  const b = (act, label, cls = 'ghost') => `<button type="button" class="btn small ${cls}" data-act="${act}">${label}</button>`;
+  let big = '';
+  if (canRefresh()) {
+    if (v.refresh_state === 'doing') big = b('unrefresh', 'Cancel') + b('refresh', `${ICON.check} Refreshed`, 'finish');
+    else if (v.refresh_state !== 'done') big = b('refresh', '▶ Start refresh', 'primary');
+  }
+  const actions = (canRefresh() && v.refresh_state === 'done' ? b('unrefresh', '↺ Undo') : '')
+    + (canTestdrive() ? b('viewing', '👀 Viewing ✓', 'ghost viewing-btn on') + b('viewdone', `${ICON.check} Done`, 'ghost viewing-btn') : '');
+  const today = dayDiff(inputDate(new Date(v.viewing_at))) <= 0;
+  return `<article class="card" data-id="${v.id}">
+    <div class="card-head">
+      ${url ? `<img class="thumb" src="${esc(url)}" alt="" data-act="photo" loading="lazy">` : `<span class="thumb placeholder">${ICON.car}</span>`}
+      <div class="card-title">
+        ${plateHTML(v)}
+        <div class="vehicle-name">${esc([v.make, v.model].map(clean).filter(Boolean).join(' ') || 'Unknown vehicle')} ${colourHTML(v.color)}</div>
+      </div>
+    </div>
+    <div class="chips"><span class="chip viewing${today ? ' soon' : ''}">👀 ${esc(viewingLabel(v))}${v.viewing_by ? ` · ${esc(nameOf(v.viewing_by))}` : ''}</span></div>
+    ${refreshStatusHTML(v)}
+    ${big ? `<div class="ready-big">${big}</div>` : ''}
+    ${actions ? `<div class="card-actions">${actions}</div>` : ''}
+  </article>`;
 }
 
 // next: 'doing' / 'done', or 'pending' to undo (Cancel / ↺ Undo)
