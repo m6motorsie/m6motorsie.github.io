@@ -11,6 +11,8 @@
 //   issue_added { vehicle_id, issue_id } an issue was noted on a car  → "issue alerts" people except who noted it
 //   polish_requested { vehicle_id } Polish was asked for on a car     → the polish team (Polish job ticked)
 //   polish_suggested { vehicle_id } the polish team suggests a polish → the sales team
+//   trade_wash_asked { trade_id } sales asked for a trade car to be washed → refresh people except who asked
+//   trade_wash_done  { trade_id } the trade car is washed                 → whoever asked (045_*.sql)
 //   (morning also sends the open issues to the "issue alerts" people — 044_*.sql)
 //
 // It trusts nothing in the request except the vehicle id: it reloads the data,
@@ -173,6 +175,30 @@ async function refresh(vehicle_id: string, event: "refresh_doing" | "refresh_don
   }, { onlyUsers: v.viewing_by ? [v.viewing_by] : [], exceptUser: v.refresh_by ?? undefined }));
 }
 
+async function tradeWash(trade_id: string, event: "trade_wash_asked" | "trade_wash_done") {
+  const { data: t } = await db.from("trade_cars").select("*").eq("id", trade_id).maybeSingle();
+  const asked = event === "trade_wash_asked";
+  const ts = asked ? t?.wash_asked_at : t?.wash_at;
+  if (!t || t.wash_state !== (asked ? "asked" : "done") || !recent(ts)) return json({ skipped: "no such change" });
+  if (!(await claim(`${event}:${trade_id}:${ts}`))) return json({ skipped: "already sent" });
+  const car = [t.make, t.model].filter(Boolean).join(" ") || "Trade car";
+  if (asked) {
+    const { data: people } = await db.from("profiles").select("id").eq("does_refresh", true);
+    return json(await send({
+      title: `🧽 Wash a trade car: ${car}`,
+      body: [t.reg, `asked by ${await nameOf(t.wash_asked_by)}`, t.wash_note].filter(Boolean).join(" · "),
+      url: "./?tab=viewing",
+      tag: `trade-wash-${t.id}`,
+    }, { onlyUsers: (people ?? []).map((p) => p.id as string), exceptUser: t.wash_asked_by ?? undefined }));
+  }
+  return json(await send({
+    title: `✅ Washed: ${car}`,
+    body: [t.reg, `by ${await nameOf(t.wash_by)}`].filter(Boolean).join(" · "),
+    url: "./?tab=trade",
+    tag: `trade-wash-${t.id}`,
+  }, { onlyUsers: t.wash_asked_by ? [t.wash_asked_by] : [], exceptUser: t.wash_by ?? undefined }));
+}
+
 const ISSUE_LABEL: Record<string, string> = {
   mats: "🟫 Mats missing", wheels: "🛞 Wheels / alloys", interior: "🧩 Missing interior part",
   scratch: "🎨 Scratch / paint", other: "⚠️ Issue",
@@ -276,8 +302,11 @@ Deno.serve(async (req) => {
   if (req.headers.get("x-m6-notify-secret") !== expectedSecret) {
     return json({ error: "unauthorized" }, 401);
   }
-  const { vehicle_id, issue_id, event = "new_stock" } = await req.json().catch(() => ({}));
+  const { vehicle_id, issue_id, trade_id, event = "new_stock" } = await req.json().catch(() => ({}));
   if (event === "morning") return morning();
+  if (event === "trade_wash_asked" || event === "trade_wash_done") {
+    return trade_id ? tradeWash(trade_id, event) : json({ error: "bad request" }, 400);
+  }
   if (!vehicle_id) return json({ error: "bad request" }, 400);
   if (event === "new_stock") return newStock(vehicle_id);
   if (event === "ready_doing" || event === "ready_done") return ready(vehicle_id, event);

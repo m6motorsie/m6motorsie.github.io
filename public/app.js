@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '121';
+const APP_VERSION = '122';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -239,6 +239,7 @@ const S = {
   online: new Set(),        // ids of people with the app open right now (presence)
   trades: [],               // trade cars: part-exchanges sold on to the trade (041_*.sql)
   tradeOffers: new Map(),   // trade id → offers, best first
+  tradeWash: [],            // trade cars the sales team asked to be washed (refresh people, 045_*.sql)
   tradeReady: false,
 };
 
@@ -294,6 +295,8 @@ async function loadAll() {
 // (collected and paid) stay 30 days. Loaded separately so the app still works
 // before 041_*.sql runs.
 async function loadTrades() {
+  // The refresh people's wash list: just the car, no prices (045_*.sql)
+  S.tradeWash = canRefresh() ? (await sb.rpc('trade_wash_list')).data ?? [] : [];
   if (!canTrade()) { S.tradeReady = false; S.trades = []; return; }
   const since = new Date(Date.now() - 30 * 864e5).toISOString();
   const [t, o] = await Promise.all([
@@ -375,7 +378,7 @@ async function signLinks(paths) {
 
 async function refreshPhotoUrls() {
   const paths = [...new Set([...S.vehicles.values()].flatMap(v => [v.photo_path, ...(inDent(v) ? v.dent_photos ?? [] : [])])
-    .concat(S.trades.map(t => t.photo_path)).filter(Boolean))]
+    .concat(S.trades.map(t => t.photo_path), S.tradeWash.map(t => t.photo_path)).filter(Boolean))]
     .filter(p => !S.thumbUrls.has(p) && !S.noThumb.has(p));
   if (!paths.length) return;
   const thumbs = await signLinks(paths.map(p => THUMB_DIR + p));
@@ -675,6 +678,7 @@ function renderTabs() {
     if (inDent(v)) counts.dent++;
     if (inViewing(v)) counts.viewing++;
   }
+  counts.viewing += washToDo().length;
   // Delivered (history) is for managers only
   $('.tabs [data-tab=delivered]').hidden = !seesSalesSide();
   if (S.tab === 'delivered' && !seesSalesSide()) S.tab = 'sold';
@@ -1391,7 +1395,8 @@ function listHTML(tab) {
     const here = !list.length ? ''
       : tab === 'sold' ? soldHTML(list) : tab === 'viewing' ? viewingHTML(list)
         : tab === 'dent' ? dentHTML(list) : list.map(cardHTML).join('');
-    if (!S.search) return (tab === 'viewing' ? viewingStatsHTML() : '') + (here || `<p class="empty">${EMPTY[tab]}</p>`);
+    if (!S.search && tab === 'viewing') return viewingStatsHTML() + tradeWashHTML() + (here || (washShown().length ? '' : `<p class="empty">${EMPTY[tab]}</p>`));
+    if (!S.search) return here || `<p class="empty">${EMPTY[tab]}</p>`;
 
     const shown = new Set(list.map(v => v.id));
     const elsewhere = $$('.tabs button:not([hidden])').map(b => b.dataset.tab)
@@ -1542,6 +1547,8 @@ async function onListClick(e) {
   if (!btn) return;
   const tradeCard = btn.closest('[data-trade]');
   if (tradeCard) return onTradeAction(btn, tradeCard.dataset.trade);
+  const washCard = btn.closest('[data-wash]');
+  if (washCard) return onWashAction(btn, washCard.dataset.wash);
   if (btn.dataset.act === 'issuefix') return fixIssue(Number(btn.dataset.issue), btn);
   const id = btn.closest('[data-id]')?.dataset.id;
   const v = S.vehicles.get(id);
@@ -1577,7 +1584,7 @@ async function onListClick(e) {
     if (!v.done_at && !confirmTap(btn, 'Not finished — tap again')) return;
     return setStatus(v, 'delivered', { undo: true });
   }
-  if (act === 'reopen') return setStatus(v, 'in_prep');
+  if (act === 'reopen') return setStatus(v, 'stock');  // back in Stock (to be sold again)
   if (act === 'remove') {
     if (!confirmTap(btn, 'Tap again to delete')) return;
     try {
@@ -1658,7 +1665,7 @@ async function setStatus(v, status, { undo = false } = {}) {
     if (status === 'delivered') {
       toast('Marked as delivered', undo ? { action: { label: 'Undo', run: () => setStatus(v, 'in_prep') } } : {});
     } else {
-      toast('Moved back to Deliveries');
+      toast(status === 'stock' ? 'Back in Stock' : 'Moved back to Deliveries');
     }
   } catch (err) { toast(errorText(err), { error: true }); }
 }
@@ -2768,6 +2775,9 @@ function tradeCardHTML(t) {
   if (t.status === 'in' || t.status === 'sold') chips.push(`<span class="chip${days >= 30 ? ' urgent' : days >= 14 ? ' warn' : ''}">${days === 0 ? 'In today' : `${days} ${days === 1 ? 'day' : 'days'} on site`}</span>`);
   if (t.status === 'sold') chips.push(`<span class="chip ok">SOLD${t.buyer ? ` · ${esc(t.buyer)}` : ''}</span>`);
   if (t.status === 'collected') chips.push(`<span class="chip">Collected ${esc(fmtDate(t.collected_at, false))}</span>`);
+  if (t.wash_state === 'asked') chips.push(`<span class="chip viewing">🧽 WASH ASKED · ${esc(nameOf(t.wash_asked_by))}</span>`);
+  if (t.wash_state === 'doing') chips.push(`<span class="chip warn">🧽 WASHING · ${esc(nameOf(t.wash_by))}</span>`);
+  if (t.wash_state === 'done') chips.push(`<span class="chip ok">✓ WASHED · ${esc(nameOf(t.wash_by))} · ${esc(fmtDate(t.wash_at))}</span>`);
   if (t.status !== 'in') chips.push(t.paid_at ? `<span class="chip ok">✓ PAID ${esc(fmtDate(t.paid_at, false))}</span>` : '<span class="chip warn">NOT PAID</span>');
   const docs = [['V5', t.has_v5], ['2 keys', t.has_two_keys], ['Service history', t.has_history]]
     .map(([l, ok]) => `<span class="trade-doc${ok ? ' ok' : ''}">${ok ? '✓' : '✗'} ${l}</span>`).join('');
@@ -2795,6 +2805,8 @@ function tradeCardHTML(t) {
     isAdmin() ? `${b('tdelete', 'Delete', 'ghost danger')}<span class="spacer"></span>` : '',
     b('tedit', 'Edit'),
     t.status === 'in' && isAdmin() ? b('tretail', 'Keep for retail → Stock') : '',
+    'wash_state' in t && (t.status === 'in' || t.status === 'sold')  // (after 045_*.sql)
+      ? (t.wash_state === 'asked' ? b('twashoff', 'Cancel wash') : t.wash_state === 'doing' ? '' : b('twash', '🧽 Wash', 'ghost viewing-btn')) : '',
     t.status === 'in' ? b('toffer', '+ Offer', 'trade-btn') : '',
     t.status === 'sold' ? b('tunsell', '↺ Not sold') + b('tcollected', `${ICON.check} Collected`, 'accent') : '',
     t.status !== 'in' ? (t.paid_at ? b('tunpaid', '↺ Not paid') : b('tpaid', '€ Paid', 'sell-btn')) : '',
@@ -2812,6 +2824,84 @@ function tradeCardHTML(t) {
     ${offersBox}
     <div class="card-actions">${actions}</div>
   </article>`;
+}
+
+// The sales team asks for a trade car to be washed (photos for the buyers)
+function openWashForm(t) {
+  const sheet = openSheet(`<form class="form" id="washForm" novalidate>
+    ${sheetHead('Ask for a wash')}
+    <div class="hold-car">${tradePlates(t)}<span class="muted">${esc(tradeName(t))}</span></div>
+    <label>Note (optional)<input name="wash_note" maxlength="200" placeholder="e.g. photos for the trade, hoover as well"></label>
+    <p class="hint" style="margin:0">The refresh team gets a notification, and you’ll be told when it’s washed.</p>
+    <p class="form-error" id="washError" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">🧽 Ask for wash</button>
+    </div>
+  </form>`);
+  const form = $('#washForm', sheet);
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const btn = form.querySelector('[type=submit]');
+    btn.disabled = true;
+    try {
+      await saveTrade(t.id, { wash_state: 'asked', wash_note: clean(form.elements.wash_note.value) });
+      closeSheet();
+      toast('Wash asked — the refresh team has been told');
+    } catch (err) {
+      btn.disabled = false;
+      const el = $('#washError', form); el.textContent = errorText(err); el.hidden = false;
+    }
+  };
+}
+
+// Refresh people: trade cars to wash, on the Viewings tab
+const washToDo = () => S.tradeWash.filter(t => t.wash_state === 'asked' || t.wash_state === 'doing');
+const washShown = () => S.tradeWash.filter(t => !S.search || [t.reg, t.make, t.model].some(f => norm(f).includes(norm(S.search))));
+
+function tradeWashHTML() {
+  const list = washShown();
+  if (!list.length) return '';
+  return `<section class="deliv-group">
+    <h3>🧽 Trade cars to wash <span class="count">${washToDo().length}</span></h3>
+    ${list.map(washCardHTML).join('')}
+  </section>`;
+}
+
+function washCardHTML(t) {
+  const url = photoSrc(t.photo_path);
+  const b = (act, label, cls = 'ghost') => `<button type="button" class="btn small ${cls}" data-act="${act}">${label}</button>`;
+  const bar = t.wash_state === 'doing'
+    ? `<div class="ready-bar doing"><span class="ring half"></span> Washing · <strong>${esc(nameOf(t.wash_by))}</strong> since ${esc(fmtDate(t.wash_started_at))}</div>`
+    : t.wash_state === 'done'
+      ? `<div class="ready-bar done">${ICON.check} Washed · ${esc(nameOf(t.wash_by))} · ${esc(fmtDate(t.wash_at))}</div>`
+      : `<div class="ready-bar todo">🧽 Wash for the trade${clean(t.wash_note) ? ` · ${esc(t.wash_note)}` : ''}</div>`;
+  const big = t.wash_state === 'asked' ? b('wstart', '▶ Start wash', 'primary')
+    : t.wash_state === 'doing' ? b('wcancel', 'Cancel') + b('wdone', `${ICON.check} Washed`, 'finish') : '';
+  return `<article class="card" data-wash="${t.id}">
+    <div class="card-head">
+      ${url ? `<img class="thumb" src="${esc(url)}" alt="" loading="lazy">` : `<span class="thumb placeholder">${ICON.car}</span>`}
+      <div class="card-title">${tradePlates(t)}<div class="vehicle-name">${esc(tradeName(t))} ${colourHTML(t.color)}</div></div>
+    </div>
+    <div class="chips"><span class="chip">TRADE · asked by ${esc(nameOf(t.wash_asked_by))} · ${esc(fmtDate(t.wash_asked_at))}</span></div>
+    ${bar}
+    ${big ? `<div class="ready-big">${big}</div>` : ''}
+    ${t.wash_state === 'done' ? `<div class="card-actions">${b('wundo', '↺ Undo')}</div>` : ''}
+  </article>`;
+}
+
+async function onWashAction(btn, id) {
+  const t = S.tradeWash.find(x => x.id === id);
+  if (!t || !canRefresh()) return;
+  const next = { wstart: 'doing', wdone: 'done', wcancel: 'asked', wundo: 'doing' }[btn.dataset.act];
+  if (!next) return;
+  if ((btn.dataset.act === 'wcancel' || btn.dataset.act === 'wundo') && !confirmTap(btn, 'Tap again')) return;
+  btn.disabled = true;
+  const { error } = await sb.rpc('trade_wash_set', { p_id: id, p_state: next });
+  if (error) { btn.disabled = false; return toast(errorText(error), { error: true }); }
+  await loadTrades();
+  renderAll();
+  if (next === 'done') toast('Washed ✓ — whoever asked has been told');
 }
 
 function tradeHTML() {
@@ -2854,6 +2944,12 @@ async function onTradeAction(btn, id) {
       if (url) openSheet(`${sheetHead(tradeName(t))}<img class="photo-full" src="${esc(url)}" alt="">`);
     } else if (act === 'tedit') openTradeForm(t);
     else if (act === 'toffer') openOfferForm(t);
+    else if (act === 'twash') openWashForm(t);
+    else if (act === 'twashoff') {
+      if (!confirmTap(btn, 'Cancel the wash?')) return;
+      await saveTrade(t.id, { wash_state: 'none' });
+      toast('Wash cancelled');
+    }
     else if (act === 'taccept') {
       const o = offersOf(t).find(x => String(x.id) === btn.dataset.offer);
       if (!o || !confirmTap(btn, `Sell for ${euro(o.amount)}?`)) return;
@@ -3768,6 +3864,7 @@ const HELP = [
     <ul><li><b>+ Trade-in</b> (Trade tab): plate, car, year, mileage, the deal it came in on, the <b>allowance</b> (what the customer was given), papers (V5, 2 keys, service history) and a photo.</li>
       <li><b>+ Offer</b> for every offer from a garage or dealer — the best is on top. <b>Accept</b> sells it.</li>
       <li>Then <b>Collected</b> when they take it and <b>€ Paid</b> when the money is in.</li>
+      <li><b>🧽 Wash</b> asks the refresh team to wash it (for photos) — they get a notification and see it on their Viewings tab, and you’re told when it’s washed.</li>
       <li>The card shows days on site (amber after 14, red after 30) and the result against the allowance.</li>
       <li>Changed your mind? A manager taps <b>Keep for retail → Stock</b>.</li></ul>
     <p>Only managers and the sales team see the Trade tab — it has prices.</p>` },
