@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '122';
+const APP_VERSION = '123';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -2759,7 +2759,8 @@ async function approvePolish(v) {
 // the sales team logs the car, collects offers, accepts the best, and marks
 // it collected and paid. Prices: managers + sales only (041_*.sql).
 // ---------------------------------------------------------------------
-const canTrade = () => seesSalesSide();
+// Managers (Bart buys some to sell on too) and the sales team — same as can_trade() in the DB
+const canTrade = () => isAdmin() || seesSalesSide();
 // Still needs something doing: on site, sold (to be collected) or not paid yet
 const tradeOpen = t => t.status === 'in' || t.status === 'sold' || (t.status === 'collected' && !t.paid_at);
 const euro = n => (n == null || n === '' ? '' : `€${Number(n).toLocaleString('en-IE', { maximumFractionDigits: 0 })}`);
