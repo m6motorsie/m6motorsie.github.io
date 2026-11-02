@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '120';
+const APP_VERSION = '121';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -741,7 +741,7 @@ function visibleVehicles() {
   const due = d => d ?? '9999-12-31';
   const sorts = {
     // Sold first, then urgent, then cars waiting for my job, then nothing done → under way → all done
-    stock: (a, b) => (needsRefresh(b) - needsRefresh(a)) || (isSold(b) - isSold(a)) || (b.urgent - a.urgent) || (needsMe(b) - needsMe(a))
+    stock: (a, b) => (isSold(b) - isSold(a)) || (b.urgent - a.urgent) || (needsMe(b) - needsMe(a))
       || (workStage(a) - workStage(b)) || (t(b.created_at) - t(a.created_at)),
     // Sold cars being worked on first (they're the priority), then by delivery date
     in_prep: (a, b) => (isSold(b) - isSold(a)) || (b.urgent - a.urgent) || due(a.delivery_date).localeCompare(due(b.delivery_date)),
@@ -3727,7 +3727,7 @@ const HELP = [
     <p>Cars going out <b>today</b> have a red outline, and the red number on the Deliveries tab says how many.</p>
     <p><b>Delivery prep</b> (the sold-cars person): tap <b>▶ Start prep</b> when you take the car — the boss gets a notification — and <b>✓ Ready to go</b> when it’s done. When the customer takes it, the sales team taps <b>✓ Delivered</b>.</p>` },
   { id: 'viewing', title: 'Viewings & refresh', tabs: ['viewing'], body: `
-    <p>The sales team taps <b>👀 Viewing</b> on a car and picks the day and time. The refresh team gets a notification, and the car goes to the top of Stock and on the <b>Viewings</b> tab.</p>
+    <p>The sales team taps <b>👀 Viewing</b> on a car and picks the day and time. The refresh team gets a notification, and the car goes on the <b>Viewings</b> tab.</p>
     <p>Refresh team: tap <b>▶ Start refresh</b> when you take the car and <b>✓ Refreshed</b> when it’s ready — whoever booked it is told each time.</p>
     <p>After the viewing, the sales team taps <b>✓ Done</b> on the car — or <b>✓ Clear past</b> on Today to clear all the ones whose time has gone. Anything left is cleared by itself at midnight.</p>
     <p>Every viewing goes on the car’s <b>🔧 Log</b> (who booked it, who refreshed it), and the top of the tab counts the viewings this week and this month.</p>` },
