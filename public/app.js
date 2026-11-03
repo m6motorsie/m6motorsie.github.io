@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '123';
+const APP_VERSION = '124';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1242,7 +1242,7 @@ function cardHTML(v) {
   // Loan and Mark sold: the sales managers only
   else actions = (salesManager() ? b('loan', 'Loan', 'ghost loan-btn') : '') + body + dent + (salesManager() ? b('sell', 'Mark sold', 'sell-btn') : '');
   const more = isAdmin() && v.status !== 'delivered'
-    ? `<details class="card-more"><summary class="btn small ghost" aria-label="More vehicle actions">More</summary><div class="card-more-menu">${edit}${b('remove', 'Delete', 'ghost danger')}</div></details>`
+    ? `<details class="card-more"><summary class="btn small ghost" aria-label="More vehicle actions">More</summary><div class="card-more-menu">${edit}${sold && salesManager() ? b('unsell', '↺ Not sold → Stock') : ''}${b('remove', 'Delete', 'ghost danger')}</div></details>`
     : '';
   // Viewings: the sales team books them; the refresh people get Start refresh / Refreshed
   if ('viewing_at' in v && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)) {  // (after 027_*.sql)
@@ -1585,6 +1585,16 @@ async function onListClick(e) {
     return setStatus(v, 'delivered', { undo: true });
   }
   if (act === 'reopen') return setStatus(v, 'stock');  // back in Stock (to be sold again)
+  // Marked sold by mistake: back to Stock (the DB clears sold_at)
+  if (act === 'unsell') {
+    if (!salesManager() || !confirmTap(btn, 'Tap again — not sold')) return;
+    try {
+      await updateVehicle(v.id, { status: 'stock' });
+      renderAll();
+      toast('Back in Stock — not sold', { action: { label: 'Undo', run: () => setStatus(v, 'in_prep') } });
+    } catch (err) { toast(errorText(err), { error: true }); }
+    return;
+  }
   if (act === 'remove') {
     if (!confirmTap(btn, 'Tap again to delete')) return;
     try {
