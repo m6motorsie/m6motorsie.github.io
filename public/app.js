@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '126';
+const APP_VERSION = '127';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -940,6 +940,8 @@ function readyBlockHTML(v) {
 
 function readyButtons(v) {
   if (!canReady()) return '';
+  // Someone else's prep: only they can finish or undo it (the bar says who)
+  if (v.ready_state !== 'pending' && v.ready_by && v.ready_by !== S.me?.id) return '';
   const undo = label => `<button class="btn small ghost" data-act="unready" title="Back to not started">${label}</button>`;
   if (v.ready_state === 'doing') return undo('Cancel') + `<button class="btn small accent" data-act="ready">${ICON.check} Ready to go</button>`;
   if (v.ready_state === 'done') return undo('↺ Undo');  // handing the car over is for the sales team
@@ -1168,7 +1170,17 @@ async function cycleReady(v, btn, next = v.ready_state === 'doing' ? 'done' : 'd
     : { ...v, ready_state: next, ready_by: v.ready_by ?? S.me.id, ready_started_at: v.ready_started_at ?? now, ready_at: next === 'done' ? now : null });
   renderAll();
   try {
-    const saved = await updateVehicle(v.id, { ready_state: next });
+    // Only if nobody changed it meanwhile (a screen that hadn't caught up yet)
+    const { data: saved, error } = await sb.from('vehicles').update({ ready_state: next })
+      .eq('id', v.id).eq('ready_state', before.ready_state ?? 'pending').select().maybeSingle();
+    if (error) throw error;
+    if (!saved) {
+      const { data: fresh } = await sb.from('vehicles').select('*').eq('id', v.id).maybeSingle();
+      if (fresh) upsertLocal(fresh); else S.vehicles.set(v.id, before);
+      renderAll();
+      return toast(`${nameOf(fresh?.ready_by)} already changed this car — nothing done`, { error: true });
+    }
+    upsertLocal(saved);
     if (next === 'doing') toast('Prep started — the boss has been told');
     else if (next === 'done') toast('Ready to go ✓', { action: { label: 'Undo', run: () => cycleReady(saved, null, 'doing') } });
     else toast('Back to not started');
