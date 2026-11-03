@@ -187,7 +187,7 @@ async function tradeWash(trade_id: string, event: "trade_wash_asked" | "trade_wa
     return json(await send({
       title: `🧽 Wash a trade car: ${car}`,
       body: [t.reg, `asked by ${await nameOf(t.wash_asked_by)}`, t.wash_note].filter(Boolean).join(" · "),
-      url: "./?tab=viewing",
+      url: "./?tab=refresh",
       tag: `trade-wash-${t.id}`,
     }, { onlyUsers: (people ?? []).map((p) => p.id as string), exceptUser: t.wash_asked_by ?? undefined }));
   }

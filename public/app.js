@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '124';
+const APP_VERSION = '125';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -41,7 +41,7 @@ const COLOUR_HEX = Object.fromEntries(COLOURS.map(([n, h]) => [n.toLowerCase(), 
 
 // Tabs are views, not the database status (see tabOf): the DB status
 // 'in_prep' means "sold, not delivered yet".
-const TAB_TITLE = { viewing: 'Viewings', stock: 'Stock', in_prep: 'In prep', polish: 'Polish', sold: 'Deliveries', bodyshop: 'Bodyshop', dent: 'Dent', issues: 'Issues', loan: 'Loan', trade: 'Trade', delivered: 'Delivered' };
+const TAB_TITLE = { viewing: 'Viewings', refresh: 'Refresh', stock: 'Stock', in_prep: 'In prep', polish: 'Polish', sold: 'Deliveries', bodyshop: 'Bodyshop', dent: 'Dent', issues: 'Issues', loan: 'Loan', trade: 'Trade', delivered: 'Delivered' };
 
 const ICON = {
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
@@ -624,6 +624,17 @@ const needsRefresh = v => inViewing(v) && v.refresh_state !== 'done';
 const canRefresh = () => !!S.me?.does_refresh;
 // The Viewings tab: the refresh team + the sales team (Glenio, Yann, Alan, Eanna, Derek)
 const canSeeViewings = () => !!(S.me?.does_refresh || S.me?.can_testdrive);
+// Refresh list (046_*.sql): the sales team and the refresh people put cars on it;
+// the refresh people do them. Done ones stay 12 h for the Undo.
+const canAskYard = () => canSeeViewings() || isAdmin();
+const onYardList = v => 'yard_state' in v && v.status !== 'delivered'
+  && (v.yard_state === 'asked' || v.yard_state === 'doing'
+    || (v.yard_state === 'done' && Date.now() - new Date(v.yard_at).getTime() < 12 * 3600e3));
+// (after 046_*.sql the cars have yard_state)
+const yardReady = () => { const first = S.vehicles.values().next().value; return !!first && 'yard_state' in first; };
+const yardToDo = v => v.status !== 'delivered' && (v.yard_state === 'asked' || v.yard_state === 'doing');
+// The Refresh tab: viewings to get ready + yard list (+ trade washes, added in refreshHTML)
+const onRefreshTab = v => inViewing(v) || onYardList(v);
 // Test drives: the sales team (profiles.can_testdrive) marks a car out / back
 const canTestdrive = () => !!S.me?.can_testdrive;
 const onTestdrive = v => !!v.testdrive_since && v.status !== 'delivered';
@@ -667,7 +678,7 @@ const needsMe = v => myServiceKeys().some(k => v.services.includes(k) && v[`${k}
 // In prep: you see the cars YOU are working on; managers see all
 const seesAllInPrep = () => isAdmin();
 const workingOnIt = v => SERVICES.some(s => v[`${s.key}_state`] === 'doing' && v[`${s.key}_by`] === S.me?.id);
-const onTab = (v, tab) => (tab === 'dent' ? inDent(v) : tab === 'viewing' ? inViewing(v)
+const onTab = (v, tab) => (tab === 'dent' ? inDent(v) : tab === 'viewing' ? inViewing(v) : tab === 'refresh' ? onRefreshTab(v)
   : tab === 'in_prep' ? tabOf(v) === 'in_prep' && (seesAllInPrep() || workingOnIt(v)) : tabOf(v) === tab);
 
 function renderTabs() {
@@ -677,16 +688,20 @@ function renderTabs() {
     if (tab !== 'in_prep' || onTab(v, 'in_prep')) counts[tab]++;
     if (inDent(v)) counts.dent++;
     if (inViewing(v)) counts.viewing++;
+    if (needsRefresh(v) || yardToDo(v)) counts.refresh++;
   }
-  counts.viewing += washToDo().length;
+  counts.refresh += washToDo().length;
   // Delivered (history) is for managers only
   $('.tabs [data-tab=delivered]').hidden = !seesSalesSide();
   if (S.tab === 'delivered' && !seesSalesSide()) S.tab = 'sold';
-  $('.tabs [data-tab=viewing]').hidden = !canSeeViewings();
+  // Viewings: the sales team; Refresh: the sales team + the refresh people
+  $('.tabs [data-tab=viewing]').hidden = !canTestdrive();
+  $('.tabs [data-tab=refresh]').hidden = !canSeeViewings();
   const noPrepTab = !isAdmin() && !myServiceKeys().length;
   $('.tabs [data-tab=in_prep]').hidden = noPrepTab;
   if (S.tab === 'in_prep' && noPrepTab) S.tab = 'sold';
-  if (S.tab === 'viewing' && !canSeeViewings()) S.tab = 'sold';
+  if (S.tab === 'viewing' && !canTestdrive()) S.tab = canSeeViewings() ? 'refresh' : 'sold';
+  if (S.tab === 'refresh' && !canSeeViewings()) S.tab = 'sold';
   // Issues list: managers and whoever gets issue alerts (Bart); Polish list: the polish team + sales managers
   const noIssues = !seesIssuesList() || !S.issuesReady;
   $('.tabs [data-tab=issues]').hidden = noIssues;
@@ -728,8 +743,8 @@ function renderTabs() {
   print.textContent = `🖨 Print ${TAB_TITLE[S.tab]?.toLowerCase()} list`;
   const fab = $('#fab');
   // Adding stock is admin-only (also enforced in the database); trade-ins: managers + sales
-  fab.hidden = !((S.tab === 'stock' && isAdmin()) || (S.tab === 'trade' && canTrade()));
-  fab.innerHTML = `${ICON.plus}<span>${S.tab === 'trade' ? 'Trade-in' : 'New stock'}</span>`;
+  fab.hidden = !((S.tab === 'stock' && isAdmin()) || (S.tab === 'trade' && canTrade()) || (S.tab === 'refresh' && canAskYard() && yardReady()));
+  fab.innerHTML = `${ICON.plus}<span>${S.tab === 'trade' ? 'Trade-in' : S.tab === 'refresh' ? 'Add cars' : 'New stock'}</span>`;
   $('#photosFab').hidden = S.tab !== 'stock' || !isAdmin();
 }
 
@@ -1187,6 +1202,7 @@ function cardHTML(v) {
     const today = dayDiff(inputDate(new Date(v.viewing_at))) <= 0;
     chips.push(`<span class="chip viewing${today ? ' soon' : ''}">👀 VIEWING · ${esc(viewingLabel(v))}${v.viewing_by ? ` · ${esc(nameOf(v.viewing_by))}` : ''}</span>`);
   }
+  if (yardToDo(v)) chips.push(`<span class="chip viewing">🧽 ${v.yard_state === 'doing' ? `REFRESHING · ${esc(nameOf(v.yard_by))}` : 'REFRESH'}</span>`);
   if (polishSuggested(v)) chips.push(`<span class="chip polish">✨ ${esc(nameOf(v.polish_suggested_by))} suggests polish${clean(v.polish_suggest_note) ? ` · ${esc(v.polish_suggest_note)}` : ''}</span>`);
   if (inDent(v)) chips.push(`<span class="chip hold">DENT${v.dent_date ? ` · ${esc(dayName(v.dent_date))}` : ''}</span>`);
   if (sold && tab !== 'sold') chips.push('<span class="chip sold">SOLD</span>');
@@ -1249,6 +1265,9 @@ function cardHTML(v) {
     actions = refreshButtons(v) + actions;
     if (canTestdrive() && !sold) actions += b('viewing', inViewing(v) ? '👀 Viewing ✓' : '👀 Viewing', `ghost viewing-btn${inViewing(v) ? ' on' : ''}`);  // sales team (030_*.sql)
     if (canTestdrive() && inViewing(v)) actions += b('viewdone', `${ICON.check} Done`, 'ghost viewing-btn');
+  }
+  if (yardReady() && canAskYard() && 'yard_state' in v && !yardToDo(v) && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)) {  // (after 046_*.sql)
+    actions += b('yardask', '🧽 Refresh', 'ghost viewing-btn');
   }
   // (a sold car isn't viewed or test-driven any more; one already out can still come back)
   if ('testdrive_since' in v && canTestdrive() && v.status !== 'delivered' && !['loan', 'bodyshop'].includes(tab)
@@ -1371,6 +1390,7 @@ const EMPTY = {
   in_prep: 'No car in prep for you right now. Tap ▶ on a job to start it.',
   sold: 'No sold cars waiting for delivery.',
   viewing: 'No viewings booked. The sales team taps “👀 Viewing” on a car to book one.',
+  refresh: 'Nothing to refresh. Tap “+ Add cars” (or “🧽 Refresh” on a car) to put cars on the list.',
   dent: 'The dent list is empty. Tap “Dent” on a car to add it.',
   loan: 'No cars out on loan.',
   bodyshop: 'No cars at the bodyshop.',
@@ -1395,12 +1415,12 @@ function listHTML(tab) {
     const here = !list.length ? ''
       : tab === 'sold' ? soldHTML(list) : tab === 'viewing' ? viewingHTML(list)
         : tab === 'dent' ? dentHTML(list) : list.map(cardHTML).join('');
-    if (!S.search && tab === 'viewing') return viewingStatsHTML() + tradeWashHTML() + (here || (washShown().length ? '' : `<p class="empty">${EMPTY[tab]}</p>`));
-    if (!S.search) return here || `<p class="empty">${EMPTY[tab]}</p>`;
+    if (tab === 'refresh') return refreshHTML(list);
+    if (!S.search) return (tab === 'viewing' ? viewingStatsHTML() : '') + (here || `<p class="empty">${EMPTY[tab]}</p>`);
 
     const shown = new Set(list.map(v => v.id));
     const elsewhere = $$('.tabs button:not([hidden])').map(b => b.dataset.tab)
-      .filter(t => t !== tab && !['dent', 'viewing', 'trade', 'issues', 'polish'].includes(t))  // lists only; their cars live in another tab
+      .filter(t => t !== tab && !['dent', 'viewing', 'refresh', 'trade', 'issues', 'polish'].includes(t))  // lists only; their cars live in another tab
       .map(t => { S.tab = t; return [t, visibleVehicles().filter(v => !shown.has(v.id))]; })
       .filter(([, cars]) => cars.length);
     if (!here && !elsewhere.length) return '<p class="empty">No vehicles match your search.</p>';
@@ -1585,6 +1605,8 @@ async function onListClick(e) {
     return setStatus(v, 'delivered', { undo: true });
   }
   if (act === 'reopen') return setStatus(v, 'stock');  // back in Stock (to be sold again)
+  if (act === 'yardask') return canAskYard() && openYardForm([v]);
+  if (act === 'yard' || act === 'yardcancel' || act === 'yardundo' || act === 'yardoff') return setYard(v, act, btn);
   // Marked sold by mistake: back to Stock (the DB clears sold_at)
   if (act === 'unsell') {
     if (!salesManager() || !confirmTap(btn, 'Tap again — not sold')) return;
@@ -2901,6 +2923,138 @@ function washCardHTML(t) {
   </article>`;
 }
 
+// ---------------------------------------------------------------------
+// Refresh tab: viewings to get ready, trade cars to wash, and the yard list
+// ---------------------------------------------------------------------
+function refreshHTML(list) {
+  const byTime = (a, b) => new Date(a.viewing_at) - new Date(b.viewing_at);
+  const viewings = list.filter(inViewing).sort(byTime);
+  const yard = list.filter(v => onYardList(v) && !inViewing(v))
+    .sort((a, b) => (a.yard_state === 'done') - (b.yard_state === 'done') || new Date(a.yard_asked_at) - new Date(b.yard_asked_at));
+  const section = (title, n, html) => `<section class="deliv-group"><h3>${title} <span class="count">${n}</span></h3>${html}</section>`;
+  const wash = S.search ? '' : tradeWashHTML();
+  const out = (viewings.length ? section('👀 For viewings', viewings.filter(needsRefresh).length, viewings.map(viewingCardHTML).join('')) : '')
+    + wash
+    + (yard.length ? section('🧽 Yard refresh', yard.filter(yardToDo).length, yard.map(yardCardHTML).join('')) : '');
+  return out || `<p class="empty">${S.search ? 'No cars on the refresh list match your search.' : EMPTY.refresh}</p>`;
+}
+
+function yardCardHTML(v) {
+  const url = photoSrc(v.photo_path);
+  const b = (act, label, cls = 'ghost') => `<button type="button" class="btn small ${cls}" data-act="${act}">${label}</button>`;
+  const note = clean(v.yard_note) ? ` · ${esc(v.yard_note)}` : '';
+  const bar = v.yard_state === 'doing'
+    ? `<div class="ready-bar doing"><span class="ring half"></span> Refresh · <strong>${esc(nameOf(v.yard_by))}</strong> since ${esc(fmtDate(v.yard_started_at))}${note}</div>`
+    : v.yard_state === 'done'
+      ? `<div class="ready-bar done">${ICON.check} Refreshed · ${esc(nameOf(v.yard_by))} · ${esc(fmtDate(v.yard_at))}</div>`
+      : `<div class="ready-bar todo">🧽 Refresh needed${note}</div>`;
+  let big = '';
+  if (canRefresh() && v.yard_state === 'asked') big = b('yard', '▶ Start refresh', 'primary');
+  if (canRefresh() && v.yard_state === 'doing') big = b('yardcancel', 'Cancel') + b('yard', `${ICON.check} Refreshed`, 'finish');
+  const actions = (canRefresh() && v.yard_state === 'done' ? b('yardundo', '↺ Undo') : '')
+    + (v.yard_state === 'asked' && canAskYard() ? b('yardoff', '✕ Take off list', 'ghost danger') : '');
+  return `<article class="card" data-id="${v.id}">
+    <div class="card-head">
+      ${url ? `<img class="thumb" src="${esc(url)}" alt="" data-act="photo" loading="lazy">` : `<span class="thumb placeholder">${ICON.car}</span>`}
+      <div class="card-title">
+        ${plateHTML(v)}
+        <div class="vehicle-name">${esc([v.make, v.model].map(clean).filter(Boolean).join(' ') || 'Unknown vehicle')} ${colourHTML(v.color)}</div>
+      </div>
+    </div>
+    <div class="chips">${isSold(v) ? '<span class="chip sold">SOLD</span>' : ''}<span class="chip">Asked by ${esc(nameOf(v.yard_asked_by))} · ${esc(fmtDate(v.yard_asked_at))}</span></div>
+    ${bar}
+    ${big ? `<div class="ready-big">${big}</div>` : ''}
+    ${actions ? `<div class="card-actions">${actions}</div>` : ''}
+  </article>`;
+}
+
+async function setYard(v, act, btn) {
+  const next = act === 'yardoff' ? 'none' : act === 'yardcancel' ? 'asked' : act === 'yardundo' ? 'doing'
+    : v.yard_state === 'doing' ? 'done' : 'doing';
+  if (next === 'none' ? !canAskYard() : !canRefresh()) return;
+  if (['yardoff', 'yardcancel', 'yardundo'].includes(act) && !confirmTap(btn, 'Tap again')) return;
+  try {
+    await updateVehicle(v.id, { yard_state: next });
+    renderAll();
+    if (next === 'done') toast('Refreshed ✓ — it’s on the car’s log');
+    if (next === 'none') toast('Taken off the refresh list');
+  } catch (err) { toast(errorText(err), { error: true }); }
+}
+
+// Put one or more cars on the refresh list, with one note for all
+function openYardForm(cars) {
+  const one = cars.length === 1 ? cars[0] : null;
+  const sheet = openSheet(`<form class="form" id="yardForm" novalidate>
+    ${sheetHead(one ? 'Add to refresh list' : `Add ${plural(cars.length, 'car')} to refresh list`)}
+    ${one ? `<div class="hold-car">${plateHTML(one)}<span class="muted">${esc([one.make, one.model].map(clean).filter(Boolean).join(' '))}</span></div>` : ''}
+    <label>Note (optional)<input name="yard_note" maxlength="200" placeholder="e.g. dusty, leaves on the bonnet, tyres"></label>
+    <p class="form-error" id="yardError" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">🧽 Add to list</button>
+    </div>
+  </form>`);
+  const form = $('#yardForm', sheet);
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const btn = form.querySelector('[type=submit]');
+    btn.disabled = true;
+    try {
+      const yard_note = clean(form.elements.yard_note.value);
+      await Promise.all(cars.map(v => updateVehicle(v.id, { yard_state: 'asked', yard_note })));
+      closeSheet();
+      renderAll();
+      toast(one ? 'On the refresh list' : `${plural(cars.length, 'car')} on the refresh list`,
+        S.tab === 'refresh' ? {} : { action: { label: 'Show', run: () => switchTab('refresh') } });
+    } catch (err) {
+      btn.disabled = false;
+      const el = $('#yardError', form); el.textContent = errorText(err); el.hidden = false;
+    }
+  };
+}
+
+// Walking the yard: tick several cars, then add them all
+function openYardPicker() {
+  const cars = [...S.vehicles.values()]
+    .filter(v => v.status !== 'delivered' && !['loan', 'bodyshop'].includes(v.hold) && !yardToDo(v))
+    .sort((a, b) => [a.make, a.model].join(' ').localeCompare([b.make, b.model].join(' ')));
+  const picked = new Set();
+  const sheet = openSheet(`${sheetHead('Add cars to refresh list')}
+    <input type="search" id="yardSearch" placeholder="Search by plate, make or model" autocomplete="off">
+    <div class="photo-tools"><button type="button" class="link-btn" id="yardNone">Clear</button><span class="muted" id="yardCount">0 selected</span></div>
+    <div class="pick-list" id="yardList"></div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="button" class="btn primary" id="yardNext" disabled>Next</button>
+    </div>`);
+  const draw = () => {
+    const q = norm($('#yardSearch', sheet).value);
+    const shown = cars.filter(v => !q || [v.reg_ie, v.reg_imp, v.make, v.model].some(f => norm(f).includes(q)));
+    $('#yardList', sheet).innerHTML = shown.length ? shown.map(v => {
+      const url = photoSrc(v.photo_path);
+      return `<label class="pick photo-pick">
+        <input type="checkbox" data-id="${v.id}" ${picked.has(v.id) ? 'checked' : ''}>
+        ${url ? `<img class="thumb" src="${esc(url)}" alt="">` : `<span class="thumb placeholder">${ICON.car}</span>`}
+        <span>${plateHTML(v)}<span class="muted">${esc([v.make, v.model].map(clean).filter(Boolean).join(' '))}${clean(v.color) ? ` · ${esc(v.color)}` : ''}${isSold(v) ? ' · SOLD' : ''}</span></span>
+      </label>`;
+    }).join('') : '<p class="empty">No cars match.</p>';
+  };
+  const update = () => {
+    $('#yardCount', sheet).textContent = `${picked.size} selected`;
+    $('#yardNext', sheet).disabled = !picked.size;
+  };
+  draw();
+  $('#yardSearch', sheet).addEventListener('input', draw);
+  $('#yardList', sheet).addEventListener('change', e => {
+    const id = e.target.dataset.id;
+    if (!id) return;
+    e.target.checked ? picked.add(id) : picked.delete(id);
+    update();
+  });
+  $('#yardNone', sheet).onclick = () => { picked.clear(); draw(); update(); };
+  $('#yardNext', sheet).onclick = () => openYardForm(cars.filter(v => picked.has(v.id)));
+}
+
 async function onWashAction(btn, id) {
   const t = S.tradeWash.find(x => x.id === id);
   if (!t || !canRefresh()) return;
@@ -3833,6 +3987,10 @@ const HELP = [
     <p>Each morning the manager prints the day’s job sheet (<b>🖨 Print deliveries list</b>). Work top to bottom and tick ☐ as you go — and tap the job in the app too.</p>
     <p>Cars going out <b>today</b> have a red outline, and the red number on the Deliveries tab says how many.</p>
     <p><b>Delivery prep</b> (the sold-cars person): tap <b>▶ Start prep</b> when you take the car — the boss gets a notification — and <b>✓ Ready to go</b> when it’s done. When the customer takes it, the sales team taps <b>✓ Delivered</b>.</p>` },
+  { id: 'refresh', title: 'Refresh list', tabs: ['refresh'], body: `
+    <p>The <b>Refresh</b> tab has everything the refresh team has to get ready: cars for <b>viewings</b> (soonest first), <b>trade cars</b> the sales team asked to wash, and the <b>yard list</b>.</p>
+    <p>Walking the yard? Tap <b>+ Add cars</b>, tick the cars that need a refresh, add a note if you like and save. Or tap <b>🧽 Refresh</b> on a car.</p>
+    <p>Refresh team: <b>▶ Start refresh</b> → <b>✓ Refreshed</b>. It goes on the car’s <b>🔧 Log</b>.</p>` },
   { id: 'viewing', title: 'Viewings & refresh', tabs: ['viewing'], body: `
     <p>The sales team taps <b>👀 Viewing</b> on a car and picks the day and time. The refresh team gets a notification, and the car goes on the <b>Viewings</b> tab.</p>
     <p>Refresh team: tap <b>▶ Start refresh</b> when you take the car and <b>✓ Refreshed</b> when it’s ready — whoever booked it is told each time.</p>
@@ -4110,7 +4268,7 @@ function wireUi() {
   $('#photosFab').innerHTML = `${ICON.camera}<span>Photos</span>`;
   $('#photosFab').addEventListener('click', openPhotoPicker);
   $('#myCount').addEventListener('click', openMyMonth);
-  $('#fab').addEventListener('click', () => (S.tab === 'trade' ? openTradeForm() : openVehicleForm()));
+  $('#fab').addEventListener('click', () => (S.tab === 'trade' ? openTradeForm() : S.tab === 'refresh' ? openYardPicker() : openVehicleForm()));
   $('#list').addEventListener('click', onListClick);
   // A card's "More" menu: one open at a time; tapping elsewhere (or an item in it) closes it
   document.addEventListener('click', e => {
