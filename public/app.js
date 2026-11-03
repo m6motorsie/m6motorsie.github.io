@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '125';
+const APP_VERSION = '126';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -633,8 +633,8 @@ const onYardList = v => 'yard_state' in v && v.status !== 'delivered'
 // (after 046_*.sql the cars have yard_state)
 const yardReady = () => { const first = S.vehicles.values().next().value; return !!first && 'yard_state' in first; };
 const yardToDo = v => v.status !== 'delivered' && (v.yard_state === 'asked' || v.yard_state === 'doing');
-// The Refresh tab: viewings to get ready + yard list (+ trade washes, added in refreshHTML)
-const onRefreshTab = v => inViewing(v) || onYardList(v);
+// The Refresh tab: only the cars put on the yard list (viewings stay on Viewings)
+const onRefreshTab = onYardList;
 // Test drives: the sales team (profiles.can_testdrive) marks a car out / back
 const canTestdrive = () => !!S.me?.can_testdrive;
 const onTestdrive = v => !!v.testdrive_since && v.status !== 'delivered';
@@ -688,19 +688,19 @@ function renderTabs() {
     if (tab !== 'in_prep' || onTab(v, 'in_prep')) counts[tab]++;
     if (inDent(v)) counts.dent++;
     if (inViewing(v)) counts.viewing++;
-    if (needsRefresh(v) || yardToDo(v)) counts.refresh++;
+    if (yardToDo(v)) counts.refresh++;
   }
-  counts.refresh += washToDo().length;
+  counts.viewing += washToDo().length;
   // Delivered (history) is for managers only
   $('.tabs [data-tab=delivered]').hidden = !seesSalesSide();
   if (S.tab === 'delivered' && !seesSalesSide()) S.tab = 'sold';
-  // Viewings: the sales team; Refresh: the sales team + the refresh people
-  $('.tabs [data-tab=viewing]').hidden = !canTestdrive();
+  // Viewings and Refresh: the sales team + the refresh people
+  $('.tabs [data-tab=viewing]').hidden = !canSeeViewings();
   $('.tabs [data-tab=refresh]').hidden = !canSeeViewings();
   const noPrepTab = !isAdmin() && !myServiceKeys().length;
   $('.tabs [data-tab=in_prep]').hidden = noPrepTab;
   if (S.tab === 'in_prep' && noPrepTab) S.tab = 'sold';
-  if (S.tab === 'viewing' && !canTestdrive()) S.tab = canSeeViewings() ? 'refresh' : 'sold';
+  if (S.tab === 'viewing' && !canSeeViewings()) S.tab = 'sold';
   if (S.tab === 'refresh' && !canSeeViewings()) S.tab = 'sold';
   // Issues list: managers and whoever gets issue alerts (Bart); Polish list: the polish team + sales managers
   const noIssues = !seesIssuesList() || !S.issuesReady;
@@ -1416,7 +1416,8 @@ function listHTML(tab) {
       : tab === 'sold' ? soldHTML(list) : tab === 'viewing' ? viewingHTML(list)
         : tab === 'dent' ? dentHTML(list) : list.map(cardHTML).join('');
     if (tab === 'refresh') return refreshHTML(list);
-    if (!S.search) return (tab === 'viewing' ? viewingStatsHTML() : '') + (here || `<p class="empty">${EMPTY[tab]}</p>`);
+    if (!S.search && tab === 'viewing') return viewingStatsHTML() + tradeWashHTML() + (here || (washShown().length ? '' : `<p class="empty">${EMPTY[tab]}</p>`));
+    if (!S.search) return here || `<p class="empty">${EMPTY[tab]}</p>`;
 
     const shown = new Set(list.map(v => v.id));
     const elsewhere = $$('.tabs button:not([hidden])').map(b => b.dataset.tab)
@@ -2924,18 +2925,13 @@ function washCardHTML(t) {
 }
 
 // ---------------------------------------------------------------------
-// Refresh tab: viewings to get ready, trade cars to wash, and the yard list
+// Refresh tab: the cars put on the yard refresh list
 // ---------------------------------------------------------------------
 function refreshHTML(list) {
-  const byTime = (a, b) => new Date(a.viewing_at) - new Date(b.viewing_at);
-  const viewings = list.filter(inViewing).sort(byTime);
-  const yard = list.filter(v => onYardList(v) && !inViewing(v))
+  const yard = list
     .sort((a, b) => (a.yard_state === 'done') - (b.yard_state === 'done') || new Date(a.yard_asked_at) - new Date(b.yard_asked_at));
   const section = (title, n, html) => `<section class="deliv-group"><h3>${title} <span class="count">${n}</span></h3>${html}</section>`;
-  const wash = S.search ? '' : tradeWashHTML();
-  const out = (viewings.length ? section('👀 For viewings', viewings.filter(needsRefresh).length, viewings.map(viewingCardHTML).join('')) : '')
-    + wash
-    + (yard.length ? section('🧽 Yard refresh', yard.filter(yardToDo).length, yard.map(yardCardHTML).join('')) : '');
+  const out = yard.length ? section('🧽 Yard refresh', yard.filter(yardToDo).length, yard.map(yardCardHTML).join('')) : '';
   return out || `<p class="empty">${S.search ? 'No cars on the refresh list match your search.' : EMPTY.refresh}</p>`;
 }
 
@@ -3988,7 +3984,7 @@ const HELP = [
     <p>Cars going out <b>today</b> have a red outline, and the red number on the Deliveries tab says how many.</p>
     <p><b>Delivery prep</b> (the sold-cars person): tap <b>▶ Start prep</b> when you take the car — the boss gets a notification — and <b>✓ Ready to go</b> when it’s done. When the customer takes it, the sales team taps <b>✓ Delivered</b>.</p>` },
   { id: 'refresh', title: 'Refresh list', tabs: ['refresh'], body: `
-    <p>The <b>Refresh</b> tab has everything the refresh team has to get ready: cars for <b>viewings</b> (soonest first), <b>trade cars</b> the sales team asked to wash, and the <b>yard list</b>.</p>
+    <p>The <b>Refresh</b> tab is the list of cars in the yard that need a quick refresh. (Viewings and trade washes stay on the <b>Viewings</b> tab.)</p>
     <p>Walking the yard? Tap <b>+ Add cars</b>, tick the cars that need a refresh, add a note if you like and save. Or tap <b>🧽 Refresh</b> on a car.</p>
     <p>Refresh team: <b>▶ Start refresh</b> → <b>✓ Refreshed</b>. It goes on the car’s <b>🔧 Log</b>.</p>` },
   { id: 'viewing', title: 'Viewings & refresh', tabs: ['viewing'], body: `
