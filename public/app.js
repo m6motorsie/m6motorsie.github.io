@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '127';
+const APP_VERSION = '128';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -295,8 +295,15 @@ async function loadAll() {
 // (collected and paid) stay 30 days. Loaded separately so the app still works
 // before 041_*.sql runs.
 async function loadTrades() {
-  // The refresh people's wash list: just the car, no prices (045_*.sql)
+  await Promise.all([loadTradeWash(), loadTradeCars()]);
+}
+
+// The refresh people's wash list: just the car, no prices (045_*.sql)
+async function loadTradeWash() {
   S.tradeWash = canRefresh() ? (await sb.rpc('trade_wash_list')).data ?? [] : [];
+}
+
+async function loadTradeCars() {
   if (!canTrade()) { S.tradeReady = false; S.trades = []; return; }
   const since = new Date(Date.now() - 30 * 864e5).toISOString();
   const [t, o] = await Promise.all([
@@ -550,6 +557,21 @@ async function updateVehicle(id, patch) {
   return data;
 }
 
+// Change a car only if `field` is still what this screen shows, so a phone that
+// hadn't caught up can't take over what someone else just did. Returns the saved
+// row, or null: then the card is reloaded and a toast says who got there first.
+async function updateIfStill(v, field, patch, byField) {
+  const { data, error } = await sb.from('vehicles').update(patch)
+    .eq('id', v.id).eq(field, v[field]).select().maybeSingle();
+  if (error) throw error;
+  if (data) { upsertLocal(data); return data; }
+  const { data: fresh } = await sb.from('vehicles').select('*').eq('id', v.id).maybeSingle();
+  if (fresh) upsertLocal(fresh);
+  renderAll();
+  toast(`${nameOf(fresh?.[byField])} already changed this car — nothing done`, { error: true });
+  return null;
+}
+
 // ---------------------------------------------------------------------
 // Screens
 // ---------------------------------------------------------------------
@@ -620,13 +642,12 @@ const inDent = v => !!v.dent_since && v.status !== 'delivered';
 const viewingsGoing = new Set();
 const inViewing = v => !!v.viewing_at && v.status !== 'delivered' && !viewingsGoing.has(v.id)
   && dayDiff(inputDate(new Date(v.viewing_at))) >= 0;
-const needsRefresh = v => inViewing(v) && v.refresh_state !== 'done';
 const canRefresh = () => !!S.me?.does_refresh;
 // The Viewings tab: the refresh team + the sales team (Glenio, Yann, Alan, Eanna, Derek)
 const canSeeViewings = () => !!(S.me?.does_refresh || S.me?.can_testdrive);
 // Refresh list (046_*.sql): the sales team and the refresh people put cars on it;
 // the refresh people do them. Done ones stay 12 h for the Undo.
-const canAskYard = () => canSeeViewings() || isAdmin();
+const canAskYard = canSeeViewings;
 const onYardList = v => 'yard_state' in v && v.status !== 'delivered'
   && (v.yard_state === 'asked' || v.yard_state === 'doing'
     || (v.yard_state === 'done' && Date.now() - new Date(v.yard_at).getTime() < 12 * 3600e3));
@@ -1007,7 +1028,7 @@ async function cycleRefresh(v, btn, next = v.refresh_state === 'doing' ? 'done' 
     : { ...v, refresh_state: next, refresh_by: v.refresh_by ?? S.me.id, refresh_started_at: v.refresh_started_at ?? now, refresh_at: next === 'done' ? now : null });
   renderAll();
   try {
-    await updateVehicle(v.id, { refresh_state: next });
+    if (!(await updateIfStill(before, 'refresh_state', { refresh_state: next }, 'refresh_by'))) return;
     toast(next === 'doing' ? 'Refresh started — whoever booked the viewing has been told'
       : next === 'done' ? 'Refreshed ✓ — whoever booked the viewing has been told' : 'Back to refresh needed');
   } catch (err) {
@@ -1133,7 +1154,6 @@ function viewingHTML(list) {
 // Viewings tab: a short card — the car, when and who booked it, and the refresh
 // (big Start refresh / Refreshed for the refresh team; edit / Done for the sales team)
 function viewingCardHTML(v) {
-  const url = photoSrc(v.photo_path);
   const b = (act, label, cls = 'ghost') => `<button type="button" class="btn small ${cls}" data-act="${act}">${label}</button>`;
   let big = '';
   if (canRefresh()) {
@@ -1144,13 +1164,7 @@ function viewingCardHTML(v) {
     + (canTestdrive() ? b('viewing', '👀 Viewing ✓', 'ghost viewing-btn on') + b('viewdone', `${ICON.check} Done`, 'ghost viewing-btn') : '');
   const today = dayDiff(inputDate(new Date(v.viewing_at))) <= 0;
   return `<article class="card" data-id="${v.id}">
-    <div class="card-head">
-      ${url ? `<img class="thumb" src="${esc(url)}" alt="" data-act="photo" loading="lazy">` : `<span class="thumb placeholder">${ICON.car}</span>`}
-      <div class="card-title">
-        ${plateHTML(v)}
-        <div class="vehicle-name">${esc([v.make, v.model].map(clean).filter(Boolean).join(' ') || 'Unknown vehicle')} ${colourHTML(v.color)}</div>
-      </div>
-    </div>
+    ${vehicleHeadHTML(v)}
     <div class="chips"><span class="chip viewing${today ? ' soon' : ''}">👀 ${esc(viewingLabel(v))}${v.viewing_by ? ` · ${esc(nameOf(v.viewing_by))}` : ''}</span></div>
     ${refreshStatusHTML(v)}
     ${big ? `<div class="ready-big">${big}</div>` : ''}
@@ -1170,17 +1184,8 @@ async function cycleReady(v, btn, next = v.ready_state === 'doing' ? 'done' : 'd
     : { ...v, ready_state: next, ready_by: v.ready_by ?? S.me.id, ready_started_at: v.ready_started_at ?? now, ready_at: next === 'done' ? now : null });
   renderAll();
   try {
-    // Only if nobody changed it meanwhile (a screen that hadn't caught up yet)
-    const { data: saved, error } = await sb.from('vehicles').update({ ready_state: next })
-      .eq('id', v.id).eq('ready_state', before.ready_state ?? 'pending').select().maybeSingle();
-    if (error) throw error;
-    if (!saved) {
-      const { data: fresh } = await sb.from('vehicles').select('*').eq('id', v.id).maybeSingle();
-      if (fresh) upsertLocal(fresh); else S.vehicles.set(v.id, before);
-      renderAll();
-      return toast(`${nameOf(fresh?.ready_by)} already changed this car — nothing done`, { error: true });
-    }
-    upsertLocal(saved);
+    const saved = await updateIfStill(before, 'ready_state', { ready_state: next }, 'ready_by');
+    if (!saved) return;
     if (next === 'doing') toast('Prep started — the boss has been told');
     else if (next === 'done') toast('Ready to go ✓', { action: { label: 'Undo', run: () => cycleReady(saved, null, 'doing') } });
     else toast('Back to not started');
@@ -1191,8 +1196,28 @@ async function cycleReady(v, btn, next = v.ready_state === 'doing' ? 'done' : 'd
   renderAll();
 }
 
-function cardHTML(v) {
+// Photo, plate, make / model and colour at the top of a car's card
+function vehicleHeadHTML(v, placeholderAttrs = '') {
   const url = photoSrc(v.photo_path);
+  return `<div class="card-head">
+      ${url ? `<img class="thumb" src="${esc(url)}" alt="" data-act="photo" loading="lazy">` : `<span class="thumb placeholder"${placeholderAttrs}>${ICON.car}</span>`}
+      <div class="card-title">
+        ${plateHTML(v)}
+        <div class="vehicle-name">${esc([v.make, v.model].map(clean).filter(Boolean).join(' ') || 'Unknown vehicle')} ${colourHTML(v.color)}</div>
+      </div>
+    </div>`;
+}
+
+// The same for a trade car (photoAct: what tapping the photo does, if anything)
+function tradeHeadHTML(t, photoAct = '') {
+  const url = photoSrc(t.photo_path);
+  return `<div class="card-head">
+      ${url ? `<img class="thumb" src="${esc(url)}" alt=""${photoAct ? ` data-act="${photoAct}"` : ''} loading="lazy">` : `<span class="thumb placeholder">${ICON.car}</span>`}
+      <div class="card-title">${tradePlates(t)}<div class="vehicle-name">${esc(tradeName(t))} ${colourHTML(t.color)}</div></div>
+    </div>`;
+}
+
+function cardHTML(v) {
   const tab = tabOf(v);
   const sold = isSold(v);
   const chips = [];
@@ -1300,14 +1325,7 @@ function cardHTML(v) {
   const flagged = (v.status !== 'delivered' && v.urgent) || (sold && dueToday(v)) || (tab === 'loan' && v.loan_due && dayDiff(v.loan_due) < 0)
     || (tab === 'bodyshop' && v.body_due && dayDiff(v.body_due) < 0);
   return `<article class="card${flagged ? ' urgent' : ''}" data-id="${v.id}">
-    <div class="card-head">
-      ${url ? `<img class="thumb" src="${esc(url)}" alt="" data-act="photo" loading="lazy">`
-        : `<span class="thumb placeholder"${isAdmin() ? ' data-act="edit" title="Add a photo"' : ''}>${ICON.car}</span>`}
-      <div class="card-title">
-        ${plateHTML(v)}
-        <div class="vehicle-name">${esc([v.make, v.model].map(clean).filter(Boolean).join(' ') || 'Unknown vehicle')} ${colourHTML(v.color)}</div>
-      </div>
-    </div>
+    ${vehicleHeadHTML(v, isAdmin() ? ' data-act="edit" title="Add a photo"' : '')}
     ${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}
     ${details ? `<dl class="details">${details}</dl>` : ''}
     ${clean(v.notes) ? `<div class="notes">${esc(v.notes)}</div>` : ''}
@@ -2086,52 +2104,60 @@ async function openPhoto(v) {
 }
 
 // Stock → "Photos": tick the cars that need photos and print a list for the day.
-function openPhotoPicker() {
-  // Only cars on site (not out on loan or at the bodyshop)
-  const cars = [...S.vehicles.values()].filter(v => v.status === 'stock' && !['loan', 'bodyshop'].includes(v.hold))
-    .sort((a, b) => [a.make, a.model].join(' ').localeCompare([b.make, b.model].join(' ')));
+// Tick several cars from a searchable list (Photos list, Refresh list)
+function openCarPicker({ title, intro = '', cars, allButton = false, actionLabel, onAction }) {
   const picked = new Set();
-  const sheet = openSheet(`${sheetHead('Photos list')}
-    <p class="muted" style="margin:0 0 8px">Tick the cars that need photos, then print the list.</p>
-    <input type="search" id="photoSearch" placeholder="Search stock by plate, make or model" autocomplete="off">
+  const sheet = openSheet(`${sheetHead(title)}
+    ${intro ? `<p class="muted" style="margin:0 0 8px">${esc(intro)}</p>` : ''}
+    <input type="search" id="pickSearch" placeholder="Search by plate, make or model" autocomplete="off">
     <div class="photo-tools">
-      <button type="button" class="link-btn" id="photoAll">Select all</button>
-      <button type="button" class="link-btn" id="photoNone">Clear</button>
-      <span class="muted" id="photoCount">0 selected</span>
+      ${allButton ? '<button type="button" class="link-btn" id="pickAll">Select all</button>' : ''}
+      <button type="button" class="link-btn" id="pickNone">Clear</button>
+      <span class="muted" id="pickCount">0 selected</span>
     </div>
-    <div class="pick-list" id="photoList"></div>
+    <div class="pick-list" id="pickList"></div>
     <div class="sheet-actions">
       <button type="button" class="btn ghost" data-close>Cancel</button>
-      <button type="button" class="btn primary" id="photoPrint" disabled>🖨 Print photo list</button>
+      <button type="button" class="btn primary" id="pickGo" disabled>${actionLabel}</button>
     </div>`);
-
   const draw = () => {
-    const q = norm($('#photoSearch', sheet).value);
+    const q = norm($('#pickSearch', sheet).value);
     const shown = cars.filter(v => !q || [v.reg_ie, v.reg_imp, v.make, v.model].some(f => norm(f).includes(q)));
-    $('#photoList', sheet).innerHTML = shown.length ? shown.map(v => {
+    $('#pickList', sheet).innerHTML = shown.length ? shown.map(v => {
       const url = photoSrc(v.photo_path);
       return `<label class="pick photo-pick">
         <input type="checkbox" data-id="${v.id}" ${picked.has(v.id) ? 'checked' : ''}>
         ${url ? `<img class="thumb" src="${esc(url)}" alt="">` : `<span class="thumb placeholder">${ICON.car}</span>`}
-        <span>${plateHTML(v)}<span class="muted">${esc([v.make, v.model].map(clean).filter(Boolean).join(' '))}${clean(v.color) ? ` · ${esc(v.color)}` : ''}</span></span>
+        <span>${plateHTML(v)}<span class="muted">${esc([v.make, v.model].map(clean).filter(Boolean).join(' '))}${clean(v.color) ? ` · ${esc(v.color)}` : ''}${isSold(v) ? ' · SOLD' : ''}</span></span>
       </label>`;
-    }).join('') : '<p class="empty">No stock cars match.</p>';
+    }).join('') : '<p class="empty">No cars match.</p>';
   };
   const update = () => {
-    $('#photoCount', sheet).textContent = `${picked.size} selected`;
-    $('#photoPrint', sheet).disabled = !picked.size;
+    $('#pickCount', sheet).textContent = `${picked.size} selected`;
+    $('#pickGo', sheet).disabled = !picked.size;
   };
   draw();
-  $('#photoSearch', sheet).addEventListener('input', draw);
-  $('#photoList', sheet).addEventListener('change', e => {
+  $('#pickSearch', sheet).addEventListener('input', draw);
+  $('#pickList', sheet).addEventListener('change', e => {
     const id = e.target.dataset.id;
     if (!id) return;
     e.target.checked ? picked.add(id) : picked.delete(id);
     update();
   });
-  $('#photoAll', sheet).onclick = () => { $$('#photoList [data-id]', sheet).forEach(b => picked.add(b.dataset.id)); draw(); update(); };
-  $('#photoNone', sheet).onclick = () => { picked.clear(); draw(); update(); };
-  $('#photoPrint', sheet).onclick = () => printPhotoList(cars.filter(v => picked.has(v.id)));
+  $('#pickAll', sheet)?.addEventListener('click', () => { $$('#pickList [data-id]', sheet).forEach(b => picked.add(b.dataset.id)); draw(); update(); });
+  $('#pickNone', sheet).onclick = () => { picked.clear(); draw(); update(); };
+  $('#pickGo', sheet).onclick = () => onAction(cars.filter(v => picked.has(v.id)));
+}
+
+const byMakeModel = (a, b) => [a.make, a.model].join(' ').localeCompare([b.make, b.model].join(' '));
+
+function openPhotoPicker() {
+  // Only cars on site (not out on loan or at the bodyshop)
+  openCarPicker({
+    title: 'Photos list', intro: 'Tick the cars that need photos, then print the list.', allButton: true,
+    cars: [...S.vehicles.values()].filter(v => v.status === 'stock' && !['loan', 'bodyshop'].includes(v.hold)).sort(byMakeModel),
+    actionLabel: '🖨 Print photo list', onAction: printPhotoList,
+  });
 }
 
 function printPhotoList(cars) {
@@ -2857,12 +2883,8 @@ function tradeCardHTML(t) {
     t.status === 'sold' ? b('tunsell', '↺ Not sold') + b('tcollected', `${ICON.check} Collected`, 'accent') : '',
     t.status !== 'in' ? (t.paid_at ? b('tunpaid', '↺ Not paid') : b('tpaid', '€ Paid', 'sell-btn')) : '',
   ].join('');
-  const url = photoSrc(t.photo_path);
   return `<article class="card trade-card" data-trade="${t.id}">
-    <div class="card-head">
-      ${url ? `<img class="thumb" src="${esc(url)}" alt="" data-act="tphoto" loading="lazy">` : `<span class="thumb placeholder">${ICON.car}</span>`}
-      <div class="card-title">${tradePlates(t)}<div class="vehicle-name">${esc(tradeName(t))} ${colourHTML(t.color)}</div></div>
-    </div>
+    ${tradeHeadHTML(t, 'tphoto')}
     ${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}
     ${details ? `<dl class="details">${details}</dl>` : ''}
     <div class="trade-docs">${docs}</div>
@@ -2915,7 +2937,6 @@ function tradeWashHTML() {
 }
 
 function washCardHTML(t) {
-  const url = photoSrc(t.photo_path);
   const b = (act, label, cls = 'ghost') => `<button type="button" class="btn small ${cls}" data-act="${act}">${label}</button>`;
   const bar = t.wash_state === 'doing'
     ? `<div class="ready-bar doing"><span class="ring half"></span> Washing · <strong>${esc(nameOf(t.wash_by))}</strong> since ${esc(fmtDate(t.wash_started_at))}</div>`
@@ -2925,10 +2946,7 @@ function washCardHTML(t) {
   const big = t.wash_state === 'asked' ? b('wstart', '▶ Start wash', 'primary')
     : t.wash_state === 'doing' ? b('wcancel', 'Cancel') + b('wdone', `${ICON.check} Washed`, 'finish') : '';
   return `<article class="card" data-wash="${t.id}">
-    <div class="card-head">
-      ${url ? `<img class="thumb" src="${esc(url)}" alt="" loading="lazy">` : `<span class="thumb placeholder">${ICON.car}</span>`}
-      <div class="card-title">${tradePlates(t)}<div class="vehicle-name">${esc(tradeName(t))} ${colourHTML(t.color)}</div></div>
-    </div>
+    ${tradeHeadHTML(t)}
     <div class="chips"><span class="chip">TRADE · asked by ${esc(nameOf(t.wash_asked_by))} · ${esc(fmtDate(t.wash_asked_at))}</span></div>
     ${bar}
     ${big ? `<div class="ready-big">${big}</div>` : ''}
@@ -2948,7 +2966,6 @@ function refreshHTML(list) {
 }
 
 function yardCardHTML(v) {
-  const url = photoSrc(v.photo_path);
   const b = (act, label, cls = 'ghost') => `<button type="button" class="btn small ${cls}" data-act="${act}">${label}</button>`;
   const note = clean(v.yard_note) ? ` · ${esc(v.yard_note)}` : '';
   const bar = v.yard_state === 'doing'
@@ -2962,13 +2979,7 @@ function yardCardHTML(v) {
   const actions = (canRefresh() && v.yard_state === 'done' ? b('yardundo', '↺ Undo') : '')
     + (v.yard_state === 'asked' && canAskYard() ? b('yardoff', '✕ Take off list', 'ghost danger') : '');
   return `<article class="card" data-id="${v.id}">
-    <div class="card-head">
-      ${url ? `<img class="thumb" src="${esc(url)}" alt="" data-act="photo" loading="lazy">` : `<span class="thumb placeholder">${ICON.car}</span>`}
-      <div class="card-title">
-        ${plateHTML(v)}
-        <div class="vehicle-name">${esc([v.make, v.model].map(clean).filter(Boolean).join(' ') || 'Unknown vehicle')} ${colourHTML(v.color)}</div>
-      </div>
-    </div>
+    ${vehicleHeadHTML(v)}
     <div class="chips">${isSold(v) ? '<span class="chip sold">SOLD</span>' : ''}<span class="chip">Asked by ${esc(nameOf(v.yard_asked_by))} · ${esc(fmtDate(v.yard_asked_at))}</span></div>
     ${bar}
     ${big ? `<div class="ready-big">${big}</div>` : ''}
@@ -2982,7 +2993,7 @@ async function setYard(v, act, btn) {
   if (next === 'none' ? !canAskYard() : !canRefresh()) return;
   if (['yardoff', 'yardcancel', 'yardundo'].includes(act) && !confirmTap(btn, 'Tap again')) return;
   try {
-    await updateVehicle(v.id, { yard_state: next });
+    if (!(await updateIfStill(v, 'yard_state', { yard_state: next }, 'yard_by'))) return;
     renderAll();
     if (next === 'done') toast('Refreshed ✓ — it’s on the car’s log');
     if (next === 'none') toast('Taken off the refresh list');
@@ -3009,7 +3020,10 @@ function openYardForm(cars) {
     btn.disabled = true;
     try {
       const yard_note = clean(form.elements.yard_note.value);
-      await Promise.all(cars.map(v => updateVehicle(v.id, { yard_state: 'asked', yard_note })));
+      const { data, error } = await sb.from('vehicles').update({ yard_state: 'asked', yard_note })
+        .in('id', cars.map(v => v.id)).select();
+      if (error) throw error;
+      (data ?? []).forEach(upsertLocal);
       closeSheet();
       renderAll();
       toast(one ? 'On the refresh list' : `${plural(cars.length, 'car')} on the refresh list`,
@@ -3023,44 +3037,12 @@ function openYardForm(cars) {
 
 // Walking the yard: tick several cars, then add them all
 function openYardPicker() {
-  const cars = [...S.vehicles.values()]
-    .filter(v => v.status !== 'delivered' && !['loan', 'bodyshop'].includes(v.hold) && !yardToDo(v))
-    .sort((a, b) => [a.make, a.model].join(' ').localeCompare([b.make, b.model].join(' ')));
-  const picked = new Set();
-  const sheet = openSheet(`${sheetHead('Add cars to refresh list')}
-    <input type="search" id="yardSearch" placeholder="Search by plate, make or model" autocomplete="off">
-    <div class="photo-tools"><button type="button" class="link-btn" id="yardNone">Clear</button><span class="muted" id="yardCount">0 selected</span></div>
-    <div class="pick-list" id="yardList"></div>
-    <div class="sheet-actions">
-      <button type="button" class="btn ghost" data-close>Cancel</button>
-      <button type="button" class="btn primary" id="yardNext" disabled>Next</button>
-    </div>`);
-  const draw = () => {
-    const q = norm($('#yardSearch', sheet).value);
-    const shown = cars.filter(v => !q || [v.reg_ie, v.reg_imp, v.make, v.model].some(f => norm(f).includes(q)));
-    $('#yardList', sheet).innerHTML = shown.length ? shown.map(v => {
-      const url = photoSrc(v.photo_path);
-      return `<label class="pick photo-pick">
-        <input type="checkbox" data-id="${v.id}" ${picked.has(v.id) ? 'checked' : ''}>
-        ${url ? `<img class="thumb" src="${esc(url)}" alt="">` : `<span class="thumb placeholder">${ICON.car}</span>`}
-        <span>${plateHTML(v)}<span class="muted">${esc([v.make, v.model].map(clean).filter(Boolean).join(' '))}${clean(v.color) ? ` · ${esc(v.color)}` : ''}${isSold(v) ? ' · SOLD' : ''}</span></span>
-      </label>`;
-    }).join('') : '<p class="empty">No cars match.</p>';
-  };
-  const update = () => {
-    $('#yardCount', sheet).textContent = `${picked.size} selected`;
-    $('#yardNext', sheet).disabled = !picked.size;
-  };
-  draw();
-  $('#yardSearch', sheet).addEventListener('input', draw);
-  $('#yardList', sheet).addEventListener('change', e => {
-    const id = e.target.dataset.id;
-    if (!id) return;
-    e.target.checked ? picked.add(id) : picked.delete(id);
-    update();
+  openCarPicker({
+    title: 'Add cars to refresh list',
+    cars: [...S.vehicles.values()]
+      .filter(v => v.status !== 'delivered' && !['loan', 'bodyshop'].includes(v.hold) && !yardToDo(v)).sort(byMakeModel),
+    actionLabel: 'Next', onAction: openYardForm,
   });
-  $('#yardNone', sheet).onclick = () => { picked.clear(); draw(); update(); };
-  $('#yardNext', sheet).onclick = () => openYardForm(cars.filter(v => picked.has(v.id)));
 }
 
 async function onWashAction(btn, id) {
@@ -4428,6 +4410,13 @@ function wireAutoUpdate() {
   // Last seen every 5 min while on screen; the Team screen's "x min ago" every minute
   setInterval(touchLastSeen, 5 * 60 * 1000);
   setInterval(() => { if (S.view === 'team' && !document.hidden) renderTeam(); }, 60 * 1000);
+  // Refresh people outside sales get no live trade_cars updates (RLS): check the wash list every minute
+  setInterval(async () => {
+    if (document.hidden || !S.me || !canRefresh() || canTrade()) return;
+    const before = JSON.stringify(S.tradeWash);
+    await loadTradeWash();
+    if (JSON.stringify(S.tradeWash) !== before) { await refreshPhotoUrls(); renderAll(); }
+  }, 60 * 1000);
   window.addEventListener('online', refreshData);
   setInterval(() => { if (!document.hidden) checkForUpdate(); }, VERSION_CHECK_MS);
 }
