@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '129';
+const APP_VERSION = '130';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -718,10 +718,11 @@ function renderTabs() {
   // Viewings and Refresh: the sales team + the refresh people
   $('.tabs [data-tab=viewing]').hidden = !canSeeViewings();
   $('.tabs [data-tab=refresh]').hidden = !canSeeViewings();
-  // Mechanic: Deliveries, Stock, Bodyshop and Issues (Dent only if given Dent)
+  // Mechanic: Deliveries, Stock and Issues (Dent / Bodyshop only if given them)
   $('.tabs [data-tab=loan]').hidden = mechanicOnly();
   $('.tabs [data-tab=dent]').hidden = mechanicOnly() && !canDent();
-  if (mechanicOnly() && (S.tab === 'loan' || (S.tab === 'dent' && !canDent()))) S.tab = 'issues';
+  $('.tabs [data-tab=bodyshop]').hidden = mechanicOnly() && !canBodyshop();
+  if (mechanicOnly() && (S.tab === 'loan' || (S.tab === 'dent' && !canDent()) || (S.tab === 'bodyshop' && !canBodyshop()))) S.tab = 'issues';
   const noPrepTab = !isAdmin() && !myServiceKeys().length;
   $('.tabs [data-tab=in_prep]').hidden = noPrepTab;
   if (S.tab === 'in_prep' && noPrepTab) S.tab = 'sold';
