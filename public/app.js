@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '131';
+const APP_VERSION = '132';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -757,12 +757,13 @@ function renderTabs() {
   stockBadge.hidden = !soldInStock;
   stockBadge.textContent = soldInStock;
   stockBadge.title = `${soldInStock} sold ${soldInStock === 1 ? 'car' : 'cars'} waiting in Stock`;
-  // Red badge on Issues: open issues on sold cars (to fix before they go out)
-  const soldIssues = noIssues ? 0 : openIssueRows().filter(r => isSold(r.v)).length;
+  // Issues: just the red number with all the open issues (no grey count)
+  const openCount = noIssues ? 0 : counts.issues;
+  $('[data-tab=issues] .count:not(.today)').hidden = true;
   const issuesBadge = $('[data-tab=issues] .today');
-  issuesBadge.hidden = !soldIssues;
-  issuesBadge.textContent = soldIssues;
-  issuesBadge.title = `${soldIssues} on sold cars`;
+  issuesBadge.hidden = !openCount;
+  issuesBadge.textContent = openCount;
+  issuesBadge.title = `${openCount} open ${openCount === 1 ? 'issue' : 'issues'}`;
   $('#purgeBtn').hidden = S.tab !== 'delivered';
   const print = $('#printBtn');
   print.hidden = !(isAdmin() || (S.tab === 'issues' && seesIssuesList())) || !['sold', 'dent', 'issues'].includes(S.tab);
