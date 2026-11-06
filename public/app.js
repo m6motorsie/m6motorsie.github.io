@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '130';
+const APP_VERSION = '131';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1324,7 +1324,8 @@ function cardHTML(v) {
   }
   // Anyone on staff can note a problem (wheels, missing part…)
   if (S.workLogReady && worksOnCars() && v.status !== 'delivered') actions = b('worklog', '🔧 Log', 'ghost log-btn') + actions;
-  if (S.issuesReady && worksOnCars() && v.status !== 'delivered') actions = b('issues', openIssues(v).length ? `⚠ Issues (${openIssues(v).length})` : '+ Issue', `ghost issue-btn${openIssues(v).length ? ' on' : ''}`) + actions;
+  // (a mechanic doesn't add issues — the valet team maps them — but opens them to see / fix)
+  if (S.issuesReady && worksOnCars() && v.status !== 'delivered' && (!mechanicOnly() || openIssues(v).length)) actions = b('issues', openIssues(v).length ? `⚠ Issues (${openIssues(v).length})` : '+ Issue', `ghost issue-btn${openIssues(v).length ? ' on' : ''}`) + actions;
 
   // Red outline: urgent, going out today (or overdue), or a loan / bodyshop car that's late back
   const flagged = (v.status !== 'delivered' && v.urgent) || (sold && dueToday(v)) || (tab === 'loan' && v.loan_due && dayDiff(v.loan_due) < 0)
@@ -1912,7 +1913,7 @@ function openIssueSheet(v) {
     ${sheetHead('Issues')}
     <div class="hold-car">${plateHTML(v)}<span class="muted">${esc(car)}</span></div>
     <div id="issueList"></div>
-    <form id="issueForm" class="form issue-form" novalidate>
+    <form id="issueForm" class="form issue-form" novalidate${mechanicOnly() ? ' hidden' : ''}>
       <div class="section-label">Add an issue</div>
       <div class="pills">${Object.entries(ISSUE_KINDS).map(([k, x], n) =>
         `<label class="pill"><input type="radio" name="kind" value="${k}" ${n === 0 ? 'checked' : ''}><span>${x.icon} ${esc(x.label)}</span></label>`).join('')}</div>
@@ -1923,6 +1924,7 @@ function openIssueSheet(v) {
         <button type="submit" class="btn primary">Add issue</button>
       </div>
     </form>
+    ${mechanicOnly() ? '<div class="sheet-actions"><button type="button" class="btn ghost" data-close>Close</button></div>' : ''}
   </div>`);
   drawIssueList();
 
