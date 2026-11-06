@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '128';
+const APP_VERSION = '129';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -718,6 +718,10 @@ function renderTabs() {
   // Viewings and Refresh: the sales team + the refresh people
   $('.tabs [data-tab=viewing]').hidden = !canSeeViewings();
   $('.tabs [data-tab=refresh]').hidden = !canSeeViewings();
+  // Mechanic: Deliveries, Stock, Bodyshop and Issues (Dent only if given Dent)
+  $('.tabs [data-tab=loan]').hidden = mechanicOnly();
+  $('.tabs [data-tab=dent]').hidden = mechanicOnly() && !canDent();
+  if (mechanicOnly() && (S.tab === 'loan' || (S.tab === 'dent' && !canDent()))) S.tab = 'issues';
   const noPrepTab = !isAdmin() && !myServiceKeys().length;
   $('.tabs [data-tab=in_prep]').hidden = noPrepTab;
   if (S.tab === 'in_prep' && noPrepTab) S.tab = 'sold';
@@ -2674,6 +2678,10 @@ async function savePerson(id, input) {
 // delivery day, then the oldest. "Fixed" goes on the car's work log.
 // ---------------------------------------------------------------------
 const seesIssuesList = () => isAdmin() || !!S.me?.issue_alerts;
+// A mechanic's account (Nidge): Issue alerts on and nothing else — no cleaning jobs, not
+// sales, not refresh, not the sold-cars person, not a manager. Opens on Issues.
+const mechanicOnly = () => !isAdmin() && !!S.me?.issue_alerts && !myServiceKeys().length
+  && !canTestdrive() && !canRefresh() && !canReady();
 const ISSUE_ORDER = ['mats', 'interior', 'wheels', 'scratch', 'other'];
 function openIssueRows() {
   const rows = [];
@@ -4176,6 +4184,12 @@ async function onSessionChange() {
     let shown = false;
     try { shown = sessionStorage.getItem('m6.overviewShown') === '1'; sessionStorage.setItem('m6.overviewShown', '1'); } catch {}
     if (!shown) setView('overview');
+  }
+  // A mechanic starts on the Issues list (unless a notification opened another tab)
+  if (mechanicOnly() && !new URLSearchParams(location.search).get('tab')) {
+    let shown = false;
+    try { shown = sessionStorage.getItem('m6.issuesShown') === '1'; sessionStorage.setItem('m6.issuesShown', '1'); } catch {}
+    if (!shown) switchTab('issues');
   }
 }
 
