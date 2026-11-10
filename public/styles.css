@@ -239,6 +239,12 @@ main .tabs, main .toolbar { max-width: 900px; margin-left: auto; margin-right: a
 }
 .chip.urgent { background: var(--urgent); border-color: var(--urgent); color: #fff; font-weight: 700; }
 .chip.warn { background: var(--doing-bg); border-color: var(--doing-bd); color: var(--doing-fg); }
+.delivery-line { font-size: 16px; font-weight: 600; padding: 8px 12px; border-radius: 10px;
+  background: var(--surface-2); border: 1.5px solid var(--border); }
+.delivery-line b { font-weight: 800; }
+.delivery-line.soon { background: var(--doing-bg); border-color: var(--doing-bd); color: var(--doing-fg); }
+.delivery-line.now { background: var(--urgent); border-color: var(--urgent); color: #fff; }
+.delivery-line.none { font-size: 14px; font-weight: 500; color: var(--muted); border-style: dashed; }
 .chip.ok { background: var(--done-bg); border-color: var(--done-bd); color: var(--done-fg); }
 .chip.prep-state { background: var(--doing-bg); border-color: var(--doing-bd); color: var(--doing-fg); font-weight: 600; }
 .chip.body { background: #b4541a; border-color: #b4541a; color: #fff; font-weight: 700; }

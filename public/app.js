@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '136';
+const APP_VERSION = '137';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1250,10 +1250,18 @@ function cardHTML(v) {
   if (inDent(v)) chips.push(`<span class="chip hold">DENT${v.dent_date ? ` · ${esc(dayName(v.dent_date))}` : ''}</span>`);
   if (sold && tab !== 'sold') chips.push('<span class="chip sold">SOLD</span>');
   if (!sold && v.status === 'stock' && v.stock_status === 'due_in') chips.push('<span class="chip warn">Due in</span>');
-  if (sold) {
+  // Delivery day / time: its own big line under the chips (easy to miss as a chip)
+  let deliveryLine = '';
+  if (sold && v.status !== 'delivered') {
     const when = deliveryLabel(v);
-    const soon = v.delivery_date && dayDiff(v.delivery_date) <= 0;
-    if (when) chips.push(`<span class="chip${soon ? ' warn' : ''}">Delivery: ${esc(when)}</span>`);
+    const diff = v.delivery_date ? dayDiff(v.delivery_date) : null;
+    const cls = diff === null ? '' : diff <= 0 ? ' now' : diff === 1 ? ' soon' : '';
+    const prefix = diff === null ? '' : diff < 0 ? 'OVERDUE · ' : diff === 0 ? 'TODAY · ' : diff === 1 ? 'TOMORROW · ' : '';
+    deliveryLine = when
+      ? `<div class="delivery-line${cls}">🚚 Delivery <b>${esc(prefix)}${esc(when)}</b></div>`
+      : '<div class="delivery-line none">🚚 No delivery date yet</div>';
+  }
+  if (sold) {
     chips.push(v.stock_status === 'due_in' ? '<span class="chip warn">Due in</span>' : '<span class="chip">On site</span>');
   }
   if (sold && v.ready_state === 'done') chips.push(`<span class="chip ok ready">✓ READY TO GO</span>`);
@@ -1333,6 +1341,7 @@ function cardHTML(v) {
   return `<article class="card${flagged ? ' urgent' : ''}" data-id="${v.id}">
     ${vehicleHeadHTML(v, isAdmin() ? ' data-act="edit" title="Add a photo"' : '')}
     ${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}
+    ${deliveryLine}
     ${details ? `<dl class="details">${details}</dl>` : ''}
     ${clean(v.notes) ? `<div class="notes">${esc(v.notes)}</div>` : ''}
     ${issuesHTML(v)}
