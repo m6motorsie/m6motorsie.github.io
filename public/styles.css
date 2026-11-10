@@ -239,12 +239,16 @@ main .tabs, main .toolbar { max-width: 900px; margin-left: auto; margin-right: a
 }
 .chip.urgent { background: var(--urgent); border-color: var(--urgent); color: #fff; font-weight: 700; }
 .chip.warn { background: var(--doing-bg); border-color: var(--doing-bd); color: var(--doing-fg); }
-.delivery-line { font-size: 16px; font-weight: 600; padding: 8px 12px; border-radius: 10px;
+.delivery-box { flex: none; display: grid; justify-items: center; text-align: center; line-height: 1.15;
+  min-width: 78px; max-width: 42%; padding: 6px 10px; border-radius: 10px;
   background: var(--surface-2); border: 1.5px solid var(--border); }
-.delivery-line b { font-weight: 800; }
-.delivery-line.soon { background: var(--doing-bg); border-color: var(--doing-bd); color: var(--doing-fg); }
-.delivery-line.now { background: var(--urgent); border-color: var(--urgent); color: #fff; }
-.delivery-line.none { font-size: 14px; font-weight: 500; color: var(--muted); border-style: dashed; }
+.delivery-box small { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; opacity: .75; }
+.delivery-box b { font-size: 16px; font-weight: 800; }
+.delivery-box span { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.delivery-box.soon { background: var(--doing-bg); border-color: var(--doing-bd); color: var(--doing-fg); }
+.delivery-box.now { background: var(--urgent); border-color: var(--urgent); color: #fff; }
+.delivery-box.none { color: var(--muted); border-style: dashed; }
+.delivery-box.none b { font-size: 13px; font-weight: 600; }
 .chip.ok { background: var(--done-bg); border-color: var(--done-bd); color: var(--done-fg); }
 .chip.prep-state { background: var(--doing-bg); border-color: var(--doing-bd); color: var(--doing-fg); font-weight: 600; }
 .chip.body { background: #b4541a; border-color: #b4541a; color: #fff; font-weight: 700; }

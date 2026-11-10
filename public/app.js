@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '137';
+const APP_VERSION = '138';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1203,7 +1203,7 @@ async function cycleReady(v, btn, next = v.ready_state === 'doing' ? 'done' : 'd
 }
 
 // Photo, plate, make / model and colour at the top of a car's card
-function vehicleHeadHTML(v, placeholderAttrs = '') {
+function vehicleHeadHTML(v, placeholderAttrs = '', aside = '') {
   const url = photoSrc(v.photo_path);
   return `<div class="card-head">
       ${url ? `<img class="thumb" src="${esc(url)}" alt="" data-act="photo" loading="lazy">` : `<span class="thumb placeholder"${placeholderAttrs}>${ICON.car}</span>`}
@@ -1211,6 +1211,7 @@ function vehicleHeadHTML(v, placeholderAttrs = '') {
         ${plateHTML(v)}
         <div class="vehicle-name">${esc([v.make, v.model].map(clean).filter(Boolean).join(' ') || 'Unknown vehicle')} ${colourHTML(v.color)}</div>
       </div>
+      ${aside}
     </div>`;
 }
 
@@ -1250,16 +1251,17 @@ function cardHTML(v) {
   if (inDent(v)) chips.push(`<span class="chip hold">DENT${v.dent_date ? ` · ${esc(dayName(v.dent_date))}` : ''}</span>`);
   if (sold && tab !== 'sold') chips.push('<span class="chip sold">SOLD</span>');
   if (!sold && v.status === 'stock' && v.stock_status === 'due_in') chips.push('<span class="chip warn">Due in</span>');
-  // Delivery day / time: its own big line under the chips (easy to miss as a chip)
-  let deliveryLine = '';
+  // Delivery day / time: a box in the top-right corner of the card (easy to miss as a chip)
+  let deliveryBox = '';
   if (sold && v.status !== 'delivered') {
-    const when = deliveryLabel(v);
     const diff = v.delivery_date ? dayDiff(v.delivery_date) : null;
+    const day = v.delivery_date ? dayName(v.delivery_date) : clean(v.delivery_day);
+    const time = clean(v.delivery_time);
     const cls = diff === null ? '' : diff <= 0 ? ' now' : diff === 1 ? ' soon' : '';
-    const prefix = diff === null ? '' : diff < 0 ? 'OVERDUE · ' : diff === 0 ? 'TODAY · ' : diff === 1 ? 'TOMORROW · ' : '';
-    deliveryLine = when
-      ? `<div class="delivery-line${cls}">🚚 Delivery <b>${esc(prefix)}${esc(when)}</b></div>`
-      : '<div class="delivery-line none">🚚 No delivery date yet</div>';
+    const label = diff === null ? 'Delivery' : diff < 0 ? 'Overdue' : diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : 'Delivery';
+    deliveryBox = day
+      ? `<div class="delivery-box${cls}"><small>${label}</small><b>${esc(day)}</b>${time ? `<span>${esc(time)}</span>` : ''}</div>`
+      : '<div class="delivery-box none"><small>Delivery</small><b>No date</b></div>';
   }
   if (sold) {
     chips.push(v.stock_status === 'due_in' ? '<span class="chip warn">Due in</span>' : '<span class="chip">On site</span>');
@@ -1339,9 +1341,8 @@ function cardHTML(v) {
   const flagged = (v.status !== 'delivered' && v.urgent) || (sold && dueToday(v)) || (tab === 'loan' && v.loan_due && dayDiff(v.loan_due) < 0)
     || (tab === 'bodyshop' && v.body_due && dayDiff(v.body_due) < 0);
   return `<article class="card${flagged ? ' urgent' : ''}" data-id="${v.id}">
-    ${vehicleHeadHTML(v, isAdmin() ? ' data-act="edit" title="Add a photo"' : '')}
+    ${vehicleHeadHTML(v, isAdmin() ? ' data-act="edit" title="Add a photo"' : '', deliveryBox)}
     ${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}
-    ${deliveryLine}
     ${details ? `<dl class="details">${details}</dl>` : ''}
     ${clean(v.notes) ? `<div class="notes">${esc(v.notes)}</div>` : ''}
     ${issuesHTML(v)}
