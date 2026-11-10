@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '139';
+const APP_VERSION = '140';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1299,7 +1299,9 @@ function cardHTML(v) {
   const body = canBodyshop() ? b('bodyshop', 'Bodyshop') : '';
   let actions;
   if (tab === 'delivered') actions = b('reopen', 'Reopen');
-  else if (tab === 'bodyshop') actions = (canBodyshop() ? b('bodyshop', 'Details') + b('release', `${ICON.check} Back from bodyshop`, 'accent') : '');
+  else if (tab === 'bodyshop') actions = (canBodyshop() ? b('bodyshop', 'Details') + b('release', `${ICON.check} Back from bodyshop`, 'accent') : '')
+    // A car can be sold while it's at the bodyshop (it stays here, SOLD, until it's back)
+    + (salesManager() && !sold ? b('sell', 'Mark sold', 'sell-btn') : '');
   else if (tab === 'loan') actions = (isAdmin() ? b('loan', 'Loan details', 'ghost loan-btn') + b('release', `${ICON.check} Returned`, 'accent') : '');
   else if (sold) {
     // The sales team hands the car over: going out today / overdue, or ready to go (036_*.sql)
