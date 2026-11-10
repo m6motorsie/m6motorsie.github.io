@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '133';
+const APP_VERSION = '134';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1249,7 +1249,6 @@ function cardHTML(v) {
   if (polishSuggested(v)) chips.push(`<span class="chip polish">✨ ${esc(nameOf(v.polish_suggested_by))} suggests polish${clean(v.polish_suggest_note) ? ` · ${esc(v.polish_suggest_note)}` : ''}</span>`);
   if (inDent(v)) chips.push(`<span class="chip hold">DENT${v.dent_date ? ` · ${esc(dayName(v.dent_date))}` : ''}</span>`);
   if (sold && tab !== 'sold') chips.push('<span class="chip sold">SOLD</span>');
-  if (v.urgent && v.status !== 'delivered') chips.push('<span class="chip urgent">URGENT</span>');
   if (!sold && v.status === 'stock' && v.stock_status === 'due_in') chips.push('<span class="chip warn">Due in</span>');
   if (sold) {
     const when = deliveryLabel(v);
@@ -1479,7 +1478,7 @@ function listHTML(tab) {
 // ---------------------------------------------------------------------
 const carCell = v => `<strong>${esc([v.make, v.model].map(clean).filter(Boolean).join(' ') || 'Unknown vehicle')}</strong>${clean(v.color) ? `<br>${esc(v.color)}` : ''}`;
 const plateCell = v => [v.reg_ie, v.reg_imp].map(clean).filter(Boolean).map(esc).join('<br>')
-  + (v.urgent && v.status !== 'delivered' ? '<div class="urgent-tag">URGENT</div>' : '');
+  + (v.urgent && v.status !== 'delivered' ? '<div class="urgent-tag">SOLD · PRIORITY</div>' : '');
 
 function jobsCell(v) {
   return SERVICES.filter(s => v.services.includes(s.key)).map(s => {
@@ -2299,7 +2298,6 @@ function openVehicleForm({ vehicle = null, convert = false } = {}) {
     <label id="bodykitBox" ${services.includes('bodykit') ? '' : 'hidden'}>Which body kit?<input name="bodykit_note" value="${esc(v.bodykit_note)}" placeholder="e.g. M Sport front lip + side skirts"></label>
     <div class="section-label">Status</div>
     <div class="pills">
-      <label class="pill urgent"><input type="checkbox" name="urgent" ${v.urgent ? 'checked' : ''}><span>Urgent</span></label>
       <label class="pill"><input type="radio" name="stock_status" value="in_stock" ${v.stock_status !== 'due_in' ? 'checked' : ''}><span>On site</span></label>
       <label class="pill"><input type="radio" name="stock_status" value="due_in" ${v.stock_status === 'due_in' ? 'checked' : ''}><span>Due in</span></label>
     </div>
@@ -2351,7 +2349,6 @@ function openVehicleForm({ vehicle = null, convert = false } = {}) {
   // Already sold: show the sale fields, and it's a priority (Urgent) unless unticked
   $('#alreadySold', form)?.addEventListener('change', e => {
     $('#saleFields', form).hidden = !e.target.checked;
-    form.elements.urgent.checked = e.target.checked;
     $('#saveBtn', form).textContent = e.target.checked ? 'Save as sold' : 'Save';
   });
   // A delivery date can be taken off again (date not confirmed any more)
@@ -2406,7 +2403,7 @@ function openVehicleForm({ vehicle = null, convert = false } = {}) {
       color: clean(f.color.value),
       notes: clean(f.notes.value),
       services: SERVICES.filter(s => f[`svc_${s.key}`].checked).map(s => s.key),
-      urgent: f.urgent.checked,
+      urgent: false,  // set below: a sold car is a priority until its jobs are done
       stock_status: form.querySelector('[name=stock_status]:checked')?.value ?? 'in_stock',
       vrt_nct: clean(f.vrt_nct.value),
       bodykit_note: clean(f.bodykit_note.value),
@@ -2424,6 +2421,8 @@ function openVehicleForm({ vehicle = null, convert = false } = {}) {
     const arrival = isNew ? arrivalIssues() : [];
     if (arrival.some(i => i.kind === 'other' && !i.note)) return showError('Write what’s wrong for “Other”.');
     const soldNow = soldFields || !!$('#alreadySold', form)?.checked;
+    // Sold = priority (red SOLD chip + red outline) until its jobs are done (037 clears it then)
+    row.urgent = soldNow && (isNew || !v.done_at);
     if (soldNow) Object.assign(row, {
       delivery_date: f.delivery_date.value || null,
       delivery_time: clean(f.delivery_time.value),
@@ -3984,7 +3983,7 @@ const HELP = [
   { id: 'tabs', title: 'What the tabs mean', tabs: ['stock', 'in_prep', 'sold', 'delivered'], body: `
     <ul><li><b>Deliveries</b> — sold cars waiting for delivery, by delivery day.</li>
       <li><b>Viewings</b> — cars booked for a viewing, by day and time, with their refresh.</li>
-      <li><b>Stock</b> — cars not sold, nobody working on them. Urgent cars, then cars waiting for <b>your</b> job, then cars with nothing done yet are on top. A car that arrived <b>already sold</b> stays here (SOLD) until all its jobs are done (or its delivery prep starts), then moves to Deliveries. <b>URGENT</b> comes off by itself when all the car’s jobs are done.</li>
+      <li><b>Stock</b> — cars not sold, nobody working on them. Sold cars (red SOLD), then cars waiting for <b>your</b> job, then cars with nothing done yet are on top. A car that arrived <b>already sold</b> stays here (SOLD) until all its jobs are done (or its delivery prep starts), then moves to Deliveries. The red outline comes off by itself when all the car’s jobs are done.</li>
       <li><b>In prep</b> — the cars you are working on right now (managers see everyone’s). When the job is done it goes back to Stock (or to Deliveries).</li>
       <li><b>Bodyshop</b> — out for panel beating & paint.</li>
       <li><b>Dent</b> — the written dent list.</li>
@@ -4034,7 +4033,7 @@ const HELP = [
     <p>Tap the <b>box icon</b> at the top, write what you need and how many, and tap <b>Add to list</b>.</p>
     <p>The manager marks it <b>Ordered</b>, and <b>Got it</b> when it arrives. The manager can print the list.</p>` },
   { id: 'admin', title: 'Adding & selling cars (managers)', tabs: ['stock'], admin: true, body: `
-    <p><b>+ New stock</b> (Stock tab): plate, make, model, colour, VRT / NCT, <b>the services the car needs</b> (or <b>All</b>) and Urgent / On site / Due in. Already sold? Tick <b>Already sold</b>. Scratches, scuffed wheels or missing parts? Tick them under <b>Issues on arrival</b>.</p>
+    <p><b>+ New stock</b> (Stock tab): plate, make, model, colour, VRT / NCT, <b>the services the car needs</b> (or <b>All</b>) and On site / Due in. Already sold? Tick <b>Already sold</b>. Scratches, scuffed wheels or missing parts? Tick them under <b>Issues on arrival</b>.</p>
     <p><b>Mark sold</b> on a stock car and pick the delivery date and time. A car that arrives already sold: <b>+ New stock</b> → <b>Already sold</b>.</p>
     <p>The <b>chart icon</b> is the pay report: Full Valet cars per person, for <b>this month</b> (or this / last week). Print it before using the 🗑 to clear someone’s records.</p>` },
   { id: 'trade', title: 'Trade cars (sales)', tabs: ['trade'], body: `
