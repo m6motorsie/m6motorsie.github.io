@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '132';
+const APP_VERSION = '133';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -2310,6 +2310,7 @@ function openVehicleForm({ vehicle = null, convert = false } = {}) {
         <label>Delivery date<input type="date" name="delivery_date" value="${esc(v.delivery_date)}"></label>
         <label>Delivery time<input name="delivery_time" value="${esc(v.delivery_time)}" placeholder="e.g. 5PM"></label>
       </div>
+      <button type="button" class="link-btn" id="clearDate" ${v.delivery_date ? '' : 'hidden'} style="margin-top:-6px">✕ No date yet (not confirmed)</button>
       ${!v.delivery_date && clean(v.delivery_day) ? `<p class="hint">Previously noted as “${esc(v.delivery_day)}” — pick the date above.</p>` : ''}
       <label>Salesperson<input name="seller" value="${esc(v.seller)}" list="sellerList" autocapitalize="words"></label>
       <datalist id="sellerList">${sellers.map(s => `<option value="${esc(s)}">`).join('')}</datalist>
@@ -2353,6 +2354,12 @@ function openVehicleForm({ vehicle = null, convert = false } = {}) {
     form.elements.urgent.checked = e.target.checked;
     $('#saveBtn', form).textContent = e.target.checked ? 'Save as sold' : 'Save';
   });
+  // A delivery date can be taken off again (date not confirmed any more)
+  const dateIn = form.elements.delivery_date, clearDate = $('#clearDate', form);
+  if (dateIn && clearDate) {
+    ['input', 'change'].forEach(ev => dateIn.addEventListener(ev, () => { clearDate.hidden = !dateIn.value; }));
+    clearDate.onclick = () => { dateIn.value = ''; clearDate.hidden = true; };
+  }
 
   // Issues on arrival: tick a kind → a box for its details appears
   const arrivalNotes = $('#arrivalNotes', form);
