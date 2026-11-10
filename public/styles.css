@@ -261,7 +261,7 @@ main .tabs, main .toolbar { max-width: 900px; margin-left: auto; margin-right: a
 .services { display: flex; flex-wrap: wrap; gap: 6px; }
 .svc {
   display: inline-flex; align-items: center; gap: 7px; text-align: left; cursor: pointer;
-  min-height: 40px; padding: 6px 14px 6px 10px; border-radius: 999px;
+  min-height: 40px; padding: 6px 14px 6px 10px; border-radius: 10px;
   border: 1.5px solid var(--border); background: var(--pending-bg); color: var(--pending-fg);
 }
 .svc-text { display: grid; line-height: 1.2; }
