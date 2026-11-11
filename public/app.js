@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '143';
+const APP_VERSION = '144';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1117,12 +1117,44 @@ const pastViewingsToday = () => [...S.vehicles.values()]
   .filter(v => inViewing(v) && dayDiff(inputDate(new Date(v.viewing_at))) === 0 && new Date(v.viewing_at) < new Date());
 
 // Viewings in a period: the work log (done ones) + the ones booked
-function viewingCount(preset) {
+function viewingsIn(preset) {
   const [a, b] = presetRange(preset);
-  const times = [];
-  for (const log of S.workLog.values()) for (const w of log) if (w.note.startsWith('👀 Viewing')) times.push(new Date(w.created_at));
-  for (const v of S.vehicles.values()) if (inViewing(v)) times.push(new Date(v.viewing_at));
-  return times.filter(t => t >= a && t < b).length;
+  const list = [];
+  for (const [id, log] of S.workLog) for (const w of log) if (w.note.startsWith('👀 Viewing'))
+    list.push({ id, at: new Date(w.created_at), text: w.note.replace(/^👀 Viewing\s*·?\s*/, ''), done: true });
+  for (const v of S.vehicles.values()) if (inViewing(v))
+    list.push({ id: v.id, at: new Date(v.viewing_at), text: [clean(v.viewing_note), `booked by ${nameOf(v.viewing_by)}`].filter(Boolean).join(' · '), done: false });
+  return list.filter(x => x.at >= a && x.at < b).sort((x, y) => y.at - x.at);
+}
+const viewingCount = preset => viewingsIn(preset).length;
+
+// Overview: this month's viewings — booked (still to come) on top, then the ones done, newest first
+function openMonthViewings() {
+  const list = viewingsIn('this-month');
+  const when = d => d.toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' });
+  const row = x => {
+    const v = S.vehicles.get(x.id);
+    const car = v ? `${esc(carName(v))}<small>${esc(plateText(v))}${x.text ? ` · ${esc(x.text)}` : ''}</small>` : `Car no longer in the app<small>${esc(x.text)}</small>`;
+    return `<button type="button" class="ov-line"${v ? ` data-viewing-car="${v.id}"` : ' disabled'}>
+      <span><strong>${car}</strong></span><span class="age-days">${esc(when(x.at))}</span>${v ? '<span class="person-chevron">›</span>' : ''}</button>`;
+  };
+  const coming = list.filter(x => !x.done).reverse(), done = list.filter(x => x.done);
+  const sheet = openSheet(`<div class="form">
+    ${sheetHead(`Viewings this month (${list.length})`)}
+    ${coming.length ? `<div class="section-label">Booked</div><div class="ov-list">${coming.map(row).join('')}</div>` : ''}
+    ${done.length ? `<div class="section-label">Done</div><div class="ov-list">${done.map(row).join('')}</div>` : ''}
+    ${list.length ? '' : '<p class="muted">No viewings this month yet.</p>'}
+    <div class="sheet-actions"><button type="button" class="btn ghost" data-close>Close</button></div>
+  </div>`);
+  sheet.addEventListener('click', e => {
+    const c = e.target.closest('[data-viewing-car]');
+    if (!c) return;
+    const v = S.vehicles.get(c.dataset.viewingCar);
+    closeSheet();
+    if (!v) return;
+    setView('main');
+    followCard(v.id, tabOf(v));
+  });
 }
 
 // "👀 5 viewings this week · 18 this month"
@@ -3361,7 +3393,7 @@ function renderOverview() {
   const lateOut = tab => where(tab).filter(v => { const d = tab === 'loan' ? v.loan_due : v.body_due; return d && dayDiff(d) < 0; }).length;
   const issues = live.reduce((n, v) => n + openIssues(v).length, 0);
 
-  const tile = (n, label, tab, { cls = '', sub = '' } = {}) => `<button type="button" class="ov-tile ${cls}"${tab ? ` data-ov-tab="${tab}"` : ''}>
+  const tile = (n, label, tab, { cls = '', sub = '', attrs = '' } = {}) => `<button type="button" class="ov-tile ${cls}"${tab ? ` data-ov-tab="${tab}"` : ''}${attrs}>
     <strong>${n}</strong><span>${label}</span>${sub ? `<small>${sub}</small>` : ''}</button>`;
   const outToday = sold.filter(dueToday).length;
   const ready = sold.filter(v => v.ready_state === 'done').length;
@@ -3389,7 +3421,7 @@ function renderOverview() {
   const month = [
     tile(all.filter(v => inMonth(v.sold_at)).length, 'Cars sold', ''),
     tile(all.filter(v => v.status === 'delivered' && inMonth(v.delivered_at)).length, 'Delivered', seesSalesSide() ? 'delivered' : ''),
-    tile(viewingCount('this-month'), 'Viewings', canSeeViewings() ? 'viewing' : ''),
+    tile(viewingCount('this-month'), 'Viewings', '', { attrs: ' data-ov-viewings' }),
     ...SERVICES.map(sv => tile(jobs ? jobCount(sv.key) : '…', `${sv.label} done`, '')),
   ].join('');
 
@@ -3481,6 +3513,7 @@ function openStockAge(i) {
 function onOverviewClick(e) {
   const ageBar = e.target.closest('[data-age]');
   if (ageBar) return openStockAge(Number(ageBar.dataset.age));
+  if (e.target.closest('[data-ov-viewings]')) return openMonthViewings();
   const b = e.target.closest('[data-ov-tab]');
   if (!b || !b.dataset.ovTab) return;
   setView('main');
