@@ -13,7 +13,9 @@
 //   polish_suggested { vehicle_id } the polish team suggests a polish → the sales team
 //   trade_wash_asked { trade_id } sales asked for a trade car to be washed → refresh people except who asked
 //   trade_wash_done  { trade_id } the trade car is washed                 → whoever asked (045_*.sql)
-//   (morning also sends the open issues to the "issue alerts" people — 044_*.sql)
+//   supply_added { supply_id }   someone asked for supplies → "supplies alerts" people + sales team, except who asked
+//   (morning also sends the open issues to the "issue alerts" people — 044_*.sql —
+//    and what's still to buy to the "supplies alerts" people — 048_*.sql)
 //
 // It trusts nothing in the request except the vehicle id: it reloads the data,
 // checks the event really just happened, and sends each announcement at most
@@ -273,11 +275,41 @@ async function morningIssues(date: string) {
   }, { onlyUsers: people.map((p) => p.id as string) });
 }
 
+async function supplyAdded(supply_id: number) {
+  const { data: s } = await db.from("supplies").select("*").eq("id", supply_id).maybeSingle();
+  if (!s || s.status !== "needed" || !recent(s.requested_at)) return json({ skipped: "no such request" });
+  if (!(await claim(`supply_added:${supply_id}`))) return json({ skipped: "already sent" });
+  const { data: people } = await db.from("profiles").select("id").or("supply_alerts.eq.true,can_testdrive.eq.true");
+  return json(await send({
+    title: `🛒 ${await nameOf(s.requested_by)} needs: ${s.item}${s.qty ? ` ×${s.qty}` : ""}`,
+    body: s.note || "See the Supplies list",
+    url: "./?supplies=1",
+    tag: `supply-${supply_id}`,
+  }, { onlyUsers: (people ?? []).map((p) => p.id as string), exceptUser: s.requested_by ?? undefined }));
+}
+
+// 8am: what's still to buy, for the "supplies alerts" people (Bart)
+async function morningSupplies(date: string) {
+  const { data: people } = await db.from("profiles").select("id").eq("supply_alerts", true);
+  if (!people?.length) return null;
+  const { data: items } = await db.from("supplies").select("item, qty").eq("status", "needed")
+    .order("requested_at");
+  if (!items?.length) return null;
+  const names = items.map((i) => `${i.item}${i.qty ? ` ×${i.qty}` : ""}`);
+  return send({
+    title: `🛒 ${items.length} thing${items.length === 1 ? "" : "s"} to buy`,
+    body: names.slice(0, 6).join(", ") + (names.length > 6 ? ` +${names.length - 6} more` : ""),
+    url: "./?supplies=1",
+    tag: `supplies-${date}`,
+  }, { onlyUsers: people.map((p) => p.id as string) });
+}
+
 async function morning() {
   const { date, hour } = dublinNow();
   if (hour !== 8) return json({ skipped: `it's ${hour}:00 in Dublin` });
   if (!(await claim(`morning:${date}`))) return json({ skipped: "already sent today" });
   await morningIssues(date).catch((err) => console.error("morning issues failed", (err as Error).message));
+  await morningSupplies(date).catch((err) => console.error("morning supplies failed", (err as Error).message));
   const { data: cars } = await db.from("vehicles").select("*").eq("status", "in_prep");
   const sold = cars ?? [];
   const today = sold.filter((v) => v.delivery_date === date)
@@ -302,8 +334,9 @@ Deno.serve(async (req) => {
   if (req.headers.get("x-m6-notify-secret") !== expectedSecret) {
     return json({ error: "unauthorized" }, 401);
   }
-  const { vehicle_id, issue_id, trade_id, event = "new_stock" } = await req.json().catch(() => ({}));
+  const { vehicle_id, issue_id, trade_id, supply_id, event = "new_stock" } = await req.json().catch(() => ({}));
   if (event === "morning") return morning();
+  if (event === "supply_added") return supply_id ? supplyAdded(supply_id) : json({ error: "bad request" }, 400);
   if (event === "trade_wash_asked" || event === "trade_wash_done") {
     return trade_id ? tradeWash(trade_id, event) : json({ error: "bad request" }, 400);
   }

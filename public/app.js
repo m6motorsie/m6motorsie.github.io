@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '140';
+const APP_VERSION = '141';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -2581,6 +2581,7 @@ function personTags(p) {
   if (p.does_refresh) tags.push('<span class="tag alerts">🧽 Refresh</span>');
   if (p.loan_alerts) tags.push('<span class="tag alerts">🔔 Loan returns</span>');
   if (p.issue_alerts) tags.push('<span class="tag alerts">🔔 Issues</span>');
+  if (p.supply_alerts) tags.push('<span class="tag alerts">🛒 Supplies</span>');
   if (p.pay_full) tags.push('<span class="tag job">💶 Paid per Full Valet</span>');
   if (p.show_count) tags.push('<span class="tag">🏁 Counter</span>');
   if (!jobs.length && !p.handles_sold) tags.push('<span class="tag muted">Overview only</span>');
@@ -2648,6 +2649,9 @@ function openPerson(id) {
 
     ${'issue_alerts' in p ? `<div class="section-label">Issues</div>
     ${sw('data-flag="issue_alerts"', p.issue_alerts, '🔔 Issue alerts', 'A notification when someone notes an issue (mats, parts, wheels…), the open issues at 8am, and the Issues list.')}` : ''}
+
+    ${'supply_alerts' in p ? `<div class="section-label">Supplies</div>
+    ${sw('data-flag="supply_alerts"', p.supply_alerts, '🛒 Supplies alerts', 'A notification when someone asks for supplies, and at 8am what’s still to buy. (The sales team gets the “someone asked” notification anyway.)')}` : ''}
 
     ${'pay_full' in p ? `<div class="section-label">Pay</div>
     ${sw('data-flag="pay_full"', p.pay_full, '💶 Paid per Full Valet', 'Shows on the pay report. Leave off for someone who does a Full Valet now and then without being paid for it.')}` : ''}
@@ -4044,6 +4048,7 @@ const HELP = [
     <p>When it’s back, tap <b>Returned</b> — the people set for loan alerts get a notification to get it ready again.</p>` },
   { id: 'supplies', title: 'Asking for supplies', tabs: [], body: `
     <p>Tap the <b>box icon</b> at the top, write what you need and how many, and tap <b>Add to list</b>.</p>
+    <p>The sales team and the person who buys supplies get a notification straight away, and at 8am the buyer gets what’s still to buy.</p>
     <p>The manager marks it <b>Ordered</b>, and <b>Got it</b> when it arrives. The manager can print the list.</p>` },
   { id: 'admin', title: 'Adding & selling cars (managers)', tabs: ['stock'], admin: true, body: `
     <p><b>+ New stock</b> (Stock tab): plate, make, model, colour, VRT / NCT, <b>the services the car needs</b> (or <b>All</b>) and On site / Due in. Already sold? Tick <b>Already sold</b>. Scratches, scuffed wheels or missing parts? Tick them under <b>Issues on arrival</b>.</p>
@@ -4209,11 +4214,14 @@ async function onSessionChange() {
     if (!shown) setView('overview');
   }
   // A mechanic starts on the Issues list (unless a notification opened another tab)
-  if (mechanicOnly() && !new URLSearchParams(location.search).get('tab')) {
+  const params = new URLSearchParams(location.search);
+  if (mechanicOnly() && !params.get('tab') && !params.get('supplies')) {
     let shown = false;
     try { shown = sessionStorage.getItem('m6.issuesShown') === '1'; sessionStorage.setItem('m6.issuesShown', '1'); } catch {}
     if (!shown) switchTab('issues');
   }
+  // A supplies notification (?supplies=1) opens the Supplies list
+  if (params.get('supplies')) setView('supplies');
 }
 
 function wireUi() {
@@ -4231,7 +4239,9 @@ function wireUi() {
   if (!TAB_TITLE[S.tab]) S.tab = 'sold';
   navigator.serviceWorker?.addEventListener('message', e => {
     if (e.data?.type !== 'open') return;
-    const tab = new URL(e.data.url).searchParams.get('tab');
+    const params = new URL(e.data.url).searchParams;
+    if (params.get('supplies')) return setView('supplies');
+    const tab = params.get('tab');
     if (TAB_TITLE[tab]) { setView('main'); switchTab(tab); }
   });
 
