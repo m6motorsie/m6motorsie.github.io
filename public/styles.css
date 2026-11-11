@@ -781,7 +781,11 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 .ov-line.lvl2 .ov-dot { background: #ca8a04; } .ov-line.lvl3 .ov-dot { background: #64748b; }
 .ov-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
 .ov-bars { display: grid; gap: 8px; }
-.ov-bar { display: grid; grid-template-columns: 104px 1fr 30px; align-items: center; gap: 8px; font-size: 13px; }
+.ov-bar { display: grid; grid-template-columns: 104px 1fr 30px; align-items: center; gap: 8px; font-size: 13px;
+  width: 100%; padding: 3px 0; border: 0; background: none; color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.ov-bar:disabled { cursor: default; }
+.ov-bar[data-age]:hover .ov-track { outline: 1px solid var(--border); }
+.age-days { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ov-bar strong { text-align: right; font-variant-numeric: tabular-nums; }
 .ov-track { height: 10px; border-radius: 6px; background: var(--surface-2); overflow: hidden; }
 .ov-fill { display: block; height: 100%; border-radius: 6px; }

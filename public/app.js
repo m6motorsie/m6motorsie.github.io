@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '142';
+const APP_VERSION = '143';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -3419,12 +3419,11 @@ function renderOverview() {
     </button>`).join('')}${att.length > shown.length ? `<p class="muted">…and ${att.length - shown.length} more</p>` : ''}</div>`
     : '<p class="muted">Nothing overdue or at risk right now. 👍</p>';
 
-  // Stock age
-  const buckets = [['Under 30 days', 0, 30], ['30–59 days', 30, 60], ['60–89 days', 60, 90], ['90 days +', 90, Infinity]]
-    .map(([label, a, b]) => [label, stock.filter(v => { const d = daysSince(v.created_at); return d >= a && d < b; }).length]);
+  // Stock age (tap a bar for the list of cars)
+  const buckets = STOCK_AGE.map(([label, a, b]) => [label, stockInAge(stock, a, b).length]);
   const most = Math.max(1, ...buckets.map(([, n]) => n));
-  const age = `<div class="ov-bars">${buckets.map(([label, n], i) => `<div class="ov-bar"><span>${label}</span>
-      <span class="ov-track"><span class="ov-fill age${i}" style="width:${Math.round(n / most * 100)}%"></span></span><strong>${n}</strong></div>`).join('')}</div>`;
+  const age = `<div class="ov-bars">${buckets.map(([label, n], i) => `<button type="button" class="ov-bar"${n ? ` data-age="${i}"` : ' disabled'}><span>${label}</span>
+      <span class="ov-track"><span class="ov-fill age${i}" style="width:${Math.round(n / most * 100)}%"></span></span><strong>${n}</strong></button>`).join('')}</div>`;
 
   // Who is working on what, right now
   const doing = [];
@@ -3452,7 +3451,36 @@ function renderOverview() {
     <p class="muted team-hint">Tap a number or a line to open that list.</p>`;
 }
 
+const STOCK_AGE = [['Under 30 days', 0, 30], ['30–59 days', 30, 60], ['60–89 days', 60, 90], ['90 days +', 90, Infinity]];
+const stockInAge = (stock, a, b) => stock.filter(v => { const d = daysSince(v.created_at); return d >= a && d < b; });
+
+// The cars in one stock-age bar, oldest first; tap one to go to its card
+function openStockAge(i) {
+  const [label, a, b] = STOCK_AGE[i];
+  const stock = [...S.vehicles.values()].filter(v => v.status === 'stock');
+  const cars = stockInAge(stock, a, b).sort((x, y) => new Date(x.created_at) - new Date(y.created_at));
+  const sheet = openSheet(`<div class="form">
+    ${sheetHead(`Stock ${label.toLowerCase()} (${cars.length})`)}
+    <p class="muted">Days since the car was added to the app.</p>
+    <div class="ov-list">${cars.map(v => { const d = daysSince(v.created_at); return `<button type="button" class="ov-line" data-age-car="${v.id}">
+      <span><strong>${esc(carName(v))}</strong><small>${esc(plateText(v))}${clean(v.color) ? ` · ${esc(clean(v.color))}` : ''}</small></span>
+      <span class="age-days">${d} ${d === 1 ? 'day' : 'days'}</span><span class="person-chevron">›</span></button>`; }).join('')}</div>
+    <div class="sheet-actions"><button type="button" class="btn ghost" data-close>Close</button></div>
+  </div>`);
+  sheet.addEventListener('click', e => {
+    const c = e.target.closest('[data-age-car]');
+    if (!c) return;
+    const v = S.vehicles.get(c.dataset.ageCar);
+    closeSheet();
+    if (!v) return;
+    setView('main');
+    followCard(v.id, tabOf(v));
+  });
+}
+
 function onOverviewClick(e) {
+  const ageBar = e.target.closest('[data-age]');
+  if (ageBar) return openStockAge(Number(ageBar.dataset.age));
   const b = e.target.closest('[data-ov-tab]');
   if (!b || !b.dataset.ovTab) return;
   setView('main');
