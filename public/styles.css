@@ -764,7 +764,7 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 .ov-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; }
 .ov-tile { display: grid; gap: 2px; text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border);
   background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer; }
-.ov-tile:not([data-ov-tab]) { cursor: default; }
+.ov-tile:not([data-ov-tab]):not([data-ov-viewings]) { cursor: default; }
 .ov-tile strong { font-size: 26px; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .ov-tile span { font-size: 12.5px; color: var(--muted); font-weight: 600; }
 .ov-tile small { font-size: 11.5px; color: #dc2626; font-weight: 700; }
