@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '146';
+const APP_VERSION = '147';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -591,7 +591,7 @@ function setView(view) {
   $('#backBtn').hidden = view === 'main';
   $('#viewTitle').textContent = { main: 'Dealer system', team: 'Team', report: 'Pay report', supplies: 'Supplies', overview: 'Overview' }[view];
   window.scrollTo(0, 0);
-  if (view === 'overview') { renderOverview(); loadMonthJobs(); }
+  if (view === 'overview') { renderOverview(); loadOverviewData(true); }
   if (view === 'team') renderTeam();
   if (view === 'report') renderReport();
   if (view === 'supplies') renderSupplies();
@@ -1128,34 +1128,6 @@ function viewingsIn(preset) {
 }
 const viewingCount = preset => viewingsIn(preset).length;
 
-// Overview: this month's viewings — booked (still to come) on top, then the ones done, newest first
-function openMonthViewings() {
-  const list = viewingsIn('this-month');
-  const when = d => d.toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' });
-  const row = x => {
-    const v = S.vehicles.get(x.id);
-    const car = v ? `${esc(carName(v))}<small>${esc(plateText(v))}${x.text ? ` · ${esc(x.text)}` : ''}</small>` : `Car no longer in the app<small>${esc(x.text)}</small>`;
-    return `<button type="button" class="ov-line"${v ? ` data-viewing-car="${v.id}"` : ' disabled'}>
-      <span><strong>${car}</strong></span><span class="age-days">${esc(when(x.at))}</span>${v ? '<span class="person-chevron">›</span>' : ''}</button>`;
-  };
-  const coming = list.filter(x => !x.done).reverse(), done = list.filter(x => x.done);
-  const sheet = openSheet(`<div class="form">
-    ${sheetHead(`Viewings this month (${list.length})`)}
-    ${coming.length ? `<div class="section-label">Booked</div><div class="ov-list">${coming.map(row).join('')}</div>` : ''}
-    ${done.length ? `<div class="section-label">Done</div><div class="ov-list">${done.map(row).join('')}</div>` : ''}
-    ${list.length ? '' : '<p class="muted">No viewings this month yet.</p>'}
-    <div class="sheet-actions"><button type="button" class="btn ghost" data-close>Close</button></div>
-  </div>`);
-  sheet.addEventListener('click', e => {
-    const c = e.target.closest('[data-viewing-car]');
-    if (!c) return;
-    const v = S.vehicles.get(c.dataset.viewingCar);
-    closeSheet();
-    if (!v) return;
-    setView('main');
-    followCard(v.id, tabOf(v));
-  });
-}
 
 // "👀 5 viewings this week · 18 this month"
 function viewingStatsHTML() {
@@ -3365,15 +3337,113 @@ function openOfferForm(t) {
 // attention, how old the stock is and who is working on what right now.
 // Everything comes from the data the app already has.
 // ---------------------------------------------------------------------
-const monthJobs = { rows: null, at: 0 };
-async function loadMonthJobs() {
-  if (Date.now() - monthJobs.at < 60 * 1000) return;
-  const { data, error } = await sb.from('service_completions').select('service, done_at')
-    .gte('done_at', presetRange('this-month')[0].toISOString());
-  if (error) return;
-  monthJobs.rows = data;
-  monthJobs.at = Date.now();
+// Month by month: jobs from service_completions, sales / deliveries / viewings
+// from history_events (049_*.sql, kept when cars are deleted). Without 049 the
+// Overview counts from the cars still in the app, this month only.
+const OV_MONTHS = 6;
+const ov = { month: 0, jobs: null, hist: [], histReady: false, at: 0 };
+const monthRange = off => { const d = new Date(); return [new Date(d.getFullYear(), d.getMonth() + off, 1), new Date(d.getFullYear(), d.getMonth() + off + 1, 1)]; };
+const monthName = (off, opts = { month: 'long', year: 'numeric' }) => monthRange(off)[0].toLocaleDateString('en-IE', opts);
+
+async function loadOverviewData(force = false) {
+  if (!force && Date.now() - ov.at < 60 * 1000) return;
+  ov.at = Date.now();
+  const since = monthRange(-(OV_MONTHS - 1))[0].toISOString();
+  const [jobs, hist] = await Promise.all([
+    sb.from('service_completions').select('service, done_at').gte('done_at', since),
+    sb.from('history_events').select('*').gte('at', since),
+  ]);
+  if (!jobs.error) ov.jobs = jobs.data;
+  ov.histReady = !hist.error;
+  ov.hist = hist.error ? [] : hist.data;
+  if (!ov.histReady) ov.month = 0;
   if (S.view === 'overview') renderOverview();
+}
+
+// Everything the Overview shows for one month (0 = this month, -1 = last…)
+function monthFacts(off) {
+  const [a, b] = monthRange(off);
+  const inR = t => { const d = new Date(t); return d >= a && d < b; };
+  const item = (x, at, extra = {}) => {
+    const v = x.vehicle_id !== undefined ? (x.vehicle_id ? S.vehicles.get(x.vehicle_id) : null) : x;
+    return { vid: v?.id ?? null, at: new Date(at), name: carName(x), plate: plateText(x), seller: clean(x.seller), ...extra };
+  };
+  let sold, delivered, viewings;
+  if (ov.histReady) {
+    const hs = ov.hist.filter(h => inR(h.at));
+    sold = hs.filter(h => h.kind === 'sold').map(h => item(h, h.at));
+    delivered = hs.filter(h => h.kind === 'delivered').map(h => item(h, h.at));
+    viewings = hs.filter(h => h.kind === 'viewing').map(h => item(h, h.at, { text: clean(h.note), done: true }));
+  } else {
+    const all = [...S.vehicles.values()];
+    sold = all.filter(v => v.sold_at && inR(v.sold_at)).map(v => item(v, v.sold_at));
+    delivered = all.filter(v => v.status === 'delivered' && v.delivered_at && inR(v.delivered_at)).map(v => item(v, v.delivered_at));
+    viewings = [];
+    for (const [id, log] of S.workLog) for (const w of log) {
+      if (!w.note.startsWith('👀 Viewing') || !inR(w.created_at)) continue;
+      const v = S.vehicles.get(id);
+      viewings.push({ vid: v?.id ?? null, at: new Date(w.created_at), name: v ? carName(v) : 'Car no longer in the app', plate: v ? plateText(v) : '',
+        text: w.note.replace(/^👀 Viewing\s*·?\s*/, ''), done: true });
+    }
+  }
+  // Viewings still booked on the cars
+  for (const v of S.vehicles.values()) if (inViewing(v) && inR(v.viewing_at))
+    viewings.push(item(v, v.viewing_at, { text: [clean(v.viewing_note), `booked by ${nameOf(v.viewing_by)}`].filter(Boolean).join(' · '), done: false }));
+  return { sold, delivered, viewings, jobs: ov.jobs ? ov.jobs.filter(r => inR(r.done_at)) : null };
+}
+
+const monthLabel = () => ov.month === 0 ? 'this month' : `in ${monthName(ov.month, { month: 'long' })}`;
+
+// A list of cars in a sheet; tapping one (if it's still in the app) goes to its card
+function openCarListSheet(title, sections) {
+  const when = d => d.toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' });
+  const row = x => `<button type="button" class="ov-line"${x.vid ? ` data-list-car="${x.vid}"` : ' disabled'}>
+      <span><strong>${esc(x.name)}</strong><small>${esc([x.plate, x.sub].filter(Boolean).join(' · '))}</small></span>
+      <span class="age-days">${esc(when(x.at))}</span>${x.vid ? '<span class="person-chevron">›</span>' : ''}</button>`;
+  const body = sections.filter(([, items]) => items.length)
+    .map(([label, items]) => `${label ? `<div class="section-label">${esc(label)}</div>` : ''}<div class="ov-list">${items.map(row).join('')}</div>`).join('');
+  const sheet = openSheet(`<div class="form">
+    ${sheetHead(title)}
+    ${body || '<p class="muted">Nothing here.</p>'}
+    <div class="sheet-actions"><button type="button" class="btn ghost" data-close>Close</button></div>
+  </div>`);
+  sheet.addEventListener('click', e => {
+    const c = e.target.closest('[data-list-car]');
+    if (!c) return;
+    const v = S.vehicles.get(c.dataset.listCar);
+    closeSheet();
+    if (!v) return;
+    setView('main');
+    followCard(v.id, tabOf(v));
+  });
+}
+
+function openMonthViewings() {
+  const list = monthFacts(ov.month).viewings.map(x => ({ ...x, sub: x.text }));
+  const coming = list.filter(x => !x.done).sort((a, b) => a.at - b.at);
+  const done = list.filter(x => x.done).sort((a, b) => b.at - a.at);
+  openCarListSheet(`Viewings ${monthLabel()} (${list.length})`, [['Booked', coming], ['Done', done]]);
+}
+
+// Small charts: one bar per month, the chosen month darker; tap a month to open it
+function trendHTML() {
+  if (!ov.histReady) return '';
+  const offs = Array.from({ length: OV_MONTHS }, (_, i) => i - (OV_MONTHS - 1));
+  const facts = offs.map(o => [o, monthFacts(o)]);
+  const first = facts.findIndex(([, f]) => f.sold.length || f.delivered.length || f.viewings.length || f.jobs?.length);
+  const shown = first < 0 ? facts.slice(-1) : facts.slice(first);
+  const series = [
+    ['Cars sold', f => f.sold.length],
+    ['Delivered', f => f.delivered.length],
+    ['Viewings', f => f.viewings.length],
+    ...SERVICES.filter(sv => !sv.optional).map(sv => [`${sv.label} done`, f => f.jobs ? f.jobs.filter(r => r.service === sv.key).length : 0]),
+  ];
+  return `<div class="panel"><h2>Month by month</h2><div class="trend-grid">${series.map(([label, val]) => {
+    const vals = shown.map(([o, f]) => [o, val(f)]);
+    const top = Math.max(1, ...vals.map(([, n]) => n));
+    return `<div class="trend"><h3>${esc(label)}</h3><div class="trend-cols">${vals.map(([o, n]) => `<button type="button" class="trend-col${o === ov.month ? ' on' : ''}" data-ov-month="${o}" title="${esc(monthName(o))}: ${n}">
+      <span class="trend-n">${n}</span><span class="trend-track"><span class="trend-bar" style="height:${Math.max(3, Math.round(n / top * 100))}%"></span></span><span class="trend-m">${esc(monthName(o, { month: 'short' }))}</span></button>`).join('')}</div></div>`;
+  }).join('')}</div></div>`;
 }
 
 const carName = v => [v.make, v.model].map(clean).filter(Boolean).join(' ') || 'Unknown vehicle';
@@ -3384,12 +3454,9 @@ function renderOverview() {
   const view = $('#overviewView');
   if (!view || !S.me) return;
   const live = [...S.vehicles.values()].filter(v => v.status !== 'delivered');
-  const all = [...S.vehicles.values()];
   const stock = live.filter(v => v.status === 'stock');
   const sold = live.filter(isSold);
   const where = tab => live.filter(v => tabOf(v) === tab);
-  const [mStart, mEnd] = presetRange('this-month');
-  const inMonth = ts => ts && new Date(ts) >= mStart && new Date(ts) < mEnd;
   const lateOut = tab => where(tab).filter(v => { const d = tab === 'loan' ? v.loan_due : v.body_due; return d && dayDiff(d) < 0; }).length;
   const issues = live.reduce((n, v) => n + openIssues(v).length, 0);
 
@@ -3415,15 +3482,20 @@ function renderOverview() {
       { sub: S.trades.some(t => t.status !== 'in' && !t.paid_at) ? `${S.trades.filter(t => t.status !== 'in' && t.status !== 'retail' && !t.paid_at).length} not paid` : '' })] : []),
   ].join('');
 
-  // This month
-  const jobs = monthJobs.rows;
-  const jobCount = key => (jobs ?? []).filter(r => r.service === key).length;
+  // The chosen month (arrows / the charts change it)
+  loadOverviewData();
+  const facts = monthFacts(ov.month);
+  const jobCount = key => facts.jobs.filter(r => r.service === key).length;
   const month = [
-    tile(all.filter(v => inMonth(v.sold_at)).length, 'Cars sold', ''),
-    tile(all.filter(v => v.status === 'delivered' && inMonth(v.delivered_at)).length, 'Delivered', seesSalesSide() ? 'delivered' : ''),
-    tile(viewingCount('this-month'), 'Viewings', '', { attrs: ' data-ov-viewings' }),
-    ...SERVICES.map(sv => tile(jobs ? jobCount(sv.key) : '…', `${sv.label} done`, '')),
+    tile(facts.sold.length, 'Cars sold', ''),
+    tile(facts.delivered.length, 'Delivered', ov.month === 0 && seesSalesSide() ? 'delivered' : ''),
+    tile(facts.viewings.length, 'Viewings', '', { attrs: ' data-ov-viewings' }),
+    ...SERVICES.map(sv => tile(facts.jobs ? jobCount(sv.key) : '…', `${sv.label} done`, '')),
   ].join('');
+  const canBack = ov.histReady && ov.month > -(OV_MONTHS - 1);
+  const monthHead = `<h2 class="ov-month-head">${ov.histReady ? `<button type="button" class="ov-month-btn" data-ov-month="${ov.month - 1}"${canBack ? '' : ' disabled'} aria-label="Previous month">‹</button>` : ''}
+    <span>${ov.month === 0 ? 'This month' : esc(monthName(ov.month))}</span>
+    ${ov.histReady ? `<button type="button" class="ov-month-btn" data-ov-month="${ov.month + 1}"${ov.month < 0 ? '' : ' disabled'} aria-label="Next month">›</button>` : ''}</h2>`;
 
   // Needs attention: the things that cost money or a customer if they slip
   const att = [];
@@ -3452,11 +3524,11 @@ function renderOverview() {
     : '<p class="muted">Nothing overdue or at risk right now. 👍</p>';
 
   // Cars sold this month per salesperson (tap a bar for the cars)
-  const bySeller = soldThisMonthBySeller();
+  const bySeller = sellersOf(facts.sold);
   const topSeller = Math.max(1, ...bySeller.map(g => g.cars.length));
   const sellers = bySeller.length ? `<div class="ov-bars">${bySeller.map(g => `<button type="button" class="ov-bar" data-seller="${esc(g.key)}"><span>${esc(g.name)}</span>
       <span class="ov-track"><span class="ov-fill seller" style="width:${Math.round(g.cars.length / topSeller * 100)}%"></span></span><strong>${g.cars.length}</strong></button>`).join('')}</div>`
-    : '<p class="muted">No cars sold this month yet.</p>';
+    : `<p class="muted">No cars sold ${esc(monthLabel())}${ov.month === 0 ? ' yet' : ''}.</p>`;
 
   // Stock age (tap a bar for the list of cars)
   const buckets = STOCK_AGE.map(([label, a, b]) => [label, stockInAge(stock, a, b).length]);
@@ -3482,8 +3554,9 @@ function renderOverview() {
     </div>
     <div class="panel"><h2>Right now</h2><div class="ov-tiles">${now}</div></div>
     <div class="panel"><h2>Needs attention <span class="badge${att.length ? '' : ' grey'}">${att.length}</span></h2>${attention}</div>
-    <div class="panel"><h2>This month</h2><div class="ov-tiles">${month}</div></div>
-    <div class="panel"><h2>Sold this month by salesperson</h2>${sellers}</div>
+    <div class="panel">${monthHead}<div class="ov-tiles">${month}</div></div>
+    <div class="panel"><h2>Sold ${esc(monthLabel())} by salesperson</h2>${sellers}</div>
+    ${trendHTML()}
     <div class="ov-two">
       <div class="panel"><h2>Stock age</h2>${age}</div>
       <div class="panel"><h2>At work now</h2>${team}</div>
@@ -3491,45 +3564,27 @@ function renderOverview() {
     <p class="muted team-hint">Tap a number or a line to open that list.</p>`;
 }
 
-// Cars sold this month grouped by the (free-text) Salesperson, most first.
-// "EANNA" and "Eanna" are the same person (back to Stock clears sold_at in the DB).
+// Cars sold grouped by the (free-text) Salesperson, most first.
+// "EANNA" and "Eanna" are the same person.
 const titleCase = t => t.toLowerCase().replace(/(^|[\s'-])\p{L}/gu, m => m.toUpperCase());
-function soldThisMonthBySeller() {
-  const [a, b] = presetRange('this-month');
+function sellersOf(items) {
   const groups = new Map();
-  for (const v of S.vehicles.values()) {
-    if (!v.sold_at) continue;
-    const at = new Date(v.sold_at);
-    if (at < a || at >= b) continue;
-    const name = clean(v.seller);
-    const key = name.toLowerCase();
-    if (!groups.has(key)) groups.set(key, { key, name: name ? titleCase(name) : 'No salesperson', cars: [] });
-    groups.get(key).cars.push(v);
+  for (const x of items) {
+    const key = x.seller.toLowerCase();
+    if (!groups.has(key)) groups.set(key, { key, name: x.seller ? titleCase(x.seller) : 'No salesperson', cars: [] });
+    groups.get(key).cars.push(x);
   }
-  return [...groups.values()].sort((x, y) => y.cars.length - x.cars.length || (x.key ? 0 : 1) - (y.key ? 0 : 1) || x.name.localeCompare(y.name));
+  return [...groups.values()].sort((a, b) => b.cars.length - a.cars.length || (a.key ? 0 : 1) - (b.key ? 0 : 1) || a.name.localeCompare(b.name));
 }
 
 function openSellerCars(key) {
-  const g = soldThisMonthBySeller().find(x => x.key === key);
+  const g = sellersOf(monthFacts(ov.month).sold).find(x => x.key === key);
   if (!g) return;
-  const cars = g.cars.sort((x, y) => new Date(y.sold_at) - new Date(x.sold_at));
-  const when = ts => new Date(ts).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' });
-  const sheet = openSheet(`<div class="form">
-    ${sheetHead(`${g.name} — ${cars.length} sold this month`)}
-    <div class="ov-list">${cars.map(v => `<button type="button" class="ov-line" data-seller-car="${v.id}">
-      <span><strong>${esc(carName(v))}</strong><small>${esc(plateText(v))} · ${v.status === 'delivered' ? 'delivered' : 'to deliver'}</small></span>
-      <span class="age-days">${esc(when(v.sold_at))}</span><span class="person-chevron">›</span></button>`).join('')}</div>
-    <div class="sheet-actions"><button type="button" class="btn ghost" data-close>Close</button></div>
-  </div>`);
-  sheet.addEventListener('click', e => {
-    const c = e.target.closest('[data-seller-car]');
-    if (!c) return;
-    const v = S.vehicles.get(c.dataset.sellerCar);
-    closeSheet();
-    if (!v) return;
-    setView('main');
-    followCard(v.id, tabOf(v));
-  });
+  const cars = g.cars.map(x => {
+    const v = x.vid && S.vehicles.get(x.vid);
+    return { ...x, sub: v ? (v.status === 'delivered' ? 'delivered' : 'to deliver') : 'no longer in the app' };
+  }).sort((a, b) => b.at - a.at);
+  openCarListSheet(`${g.name} — ${cars.length} sold ${monthLabel()}`, [['', cars]]);
 }
 
 const STOCK_AGE = [['Under 30 days', 0, 30], ['30–59 days', 30, 60], ['60–89 days', 60, 90], ['90 days +', 90, Infinity]];
@@ -3562,6 +3617,12 @@ function openStockAge(i) {
 function onOverviewClick(e) {
   const ageBar = e.target.closest('[data-age]');
   if (ageBar) return openStockAge(Number(ageBar.dataset.age));
+  const monthBtn = e.target.closest('[data-ov-month]');
+  if (monthBtn) {
+    if (monthBtn.disabled) return;
+    ov.month = Math.min(0, Math.max(-(OV_MONTHS - 1), Number(monthBtn.dataset.ovMonth)));
+    return renderOverview();
+  }
   if (e.target.closest('[data-ov-viewings]')) return openMonthViewings();
   const sellerBar = e.target.closest('[data-seller]');
   if (sellerBar) return openSellerCars(sellerBar.dataset.seller);
