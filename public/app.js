@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '147';
+const APP_VERSION = '148';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -4399,6 +4399,8 @@ async function onSessionChange() {
 }
 
 function wireUi() {
+  // iPhone ignores user-scalable=no in Safari: stop the pinch gesture itself
+  for (const ev of ['gesturestart', 'gesturechange']) document.addEventListener(ev, e => e.preventDefault(), { passive: false });
   $('#backBtn').innerHTML = ICON.back;
   $('#teamBtn').innerHTML = ICON.team;
   $('#reportBtn').innerHTML = ICON.report;
