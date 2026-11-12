@@ -791,6 +791,7 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 .ov-fill { display: block; height: 100%; border-radius: 6px; }
 .ov-fill.age0 { background: #16a34a; } .ov-fill.age1 { background: #ca8a04; }
 .ov-fill.age2 { background: #f97316; } .ov-fill.age3 { background: #dc2626; }
+.ov-fill.seller { background: #2563eb; }
 .ov-work { display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; }
 .ov-work .ring { margin-top: 4px; flex: none; }
 

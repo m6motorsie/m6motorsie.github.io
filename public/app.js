@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '145';
+const APP_VERSION = '146';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -3451,6 +3451,13 @@ function renderOverview() {
     </button>`).join('')}${att.length > shown.length ? `<p class="muted">…and ${att.length - shown.length} more</p>` : ''}</div>`
     : '<p class="muted">Nothing overdue or at risk right now. 👍</p>';
 
+  // Cars sold this month per salesperson (tap a bar for the cars)
+  const bySeller = soldThisMonthBySeller();
+  const topSeller = Math.max(1, ...bySeller.map(g => g.cars.length));
+  const sellers = bySeller.length ? `<div class="ov-bars">${bySeller.map(g => `<button type="button" class="ov-bar" data-seller="${esc(g.key)}"><span>${esc(g.name)}</span>
+      <span class="ov-track"><span class="ov-fill seller" style="width:${Math.round(g.cars.length / topSeller * 100)}%"></span></span><strong>${g.cars.length}</strong></button>`).join('')}</div>`
+    : '<p class="muted">No cars sold this month yet.</p>';
+
   // Stock age (tap a bar for the list of cars)
   const buckets = STOCK_AGE.map(([label, a, b]) => [label, stockInAge(stock, a, b).length]);
   const most = Math.max(1, ...buckets.map(([, n]) => n));
@@ -3476,11 +3483,53 @@ function renderOverview() {
     <div class="panel"><h2>Right now</h2><div class="ov-tiles">${now}</div></div>
     <div class="panel"><h2>Needs attention <span class="badge${att.length ? '' : ' grey'}">${att.length}</span></h2>${attention}</div>
     <div class="panel"><h2>This month</h2><div class="ov-tiles">${month}</div></div>
+    <div class="panel"><h2>Sold this month by salesperson</h2>${sellers}</div>
     <div class="ov-two">
       <div class="panel"><h2>Stock age</h2>${age}</div>
       <div class="panel"><h2>At work now</h2>${team}</div>
     </div>
     <p class="muted team-hint">Tap a number or a line to open that list.</p>`;
+}
+
+// Cars sold this month grouped by the (free-text) Salesperson, most first.
+// "EANNA" and "Eanna" are the same person (back to Stock clears sold_at in the DB).
+const titleCase = t => t.toLowerCase().replace(/(^|[\s'-])\p{L}/gu, m => m.toUpperCase());
+function soldThisMonthBySeller() {
+  const [a, b] = presetRange('this-month');
+  const groups = new Map();
+  for (const v of S.vehicles.values()) {
+    if (!v.sold_at) continue;
+    const at = new Date(v.sold_at);
+    if (at < a || at >= b) continue;
+    const name = clean(v.seller);
+    const key = name.toLowerCase();
+    if (!groups.has(key)) groups.set(key, { key, name: name ? titleCase(name) : 'No salesperson', cars: [] });
+    groups.get(key).cars.push(v);
+  }
+  return [...groups.values()].sort((x, y) => y.cars.length - x.cars.length || (x.key ? 0 : 1) - (y.key ? 0 : 1) || x.name.localeCompare(y.name));
+}
+
+function openSellerCars(key) {
+  const g = soldThisMonthBySeller().find(x => x.key === key);
+  if (!g) return;
+  const cars = g.cars.sort((x, y) => new Date(y.sold_at) - new Date(x.sold_at));
+  const when = ts => new Date(ts).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' });
+  const sheet = openSheet(`<div class="form">
+    ${sheetHead(`${g.name} — ${cars.length} sold this month`)}
+    <div class="ov-list">${cars.map(v => `<button type="button" class="ov-line" data-seller-car="${v.id}">
+      <span><strong>${esc(carName(v))}</strong><small>${esc(plateText(v))} · ${v.status === 'delivered' ? 'delivered' : 'to deliver'}</small></span>
+      <span class="age-days">${esc(when(v.sold_at))}</span><span class="person-chevron">›</span></button>`).join('')}</div>
+    <div class="sheet-actions"><button type="button" class="btn ghost" data-close>Close</button></div>
+  </div>`);
+  sheet.addEventListener('click', e => {
+    const c = e.target.closest('[data-seller-car]');
+    if (!c) return;
+    const v = S.vehicles.get(c.dataset.sellerCar);
+    closeSheet();
+    if (!v) return;
+    setView('main');
+    followCard(v.id, tabOf(v));
+  });
 }
 
 const STOCK_AGE = [['Under 30 days', 0, 30], ['30–59 days', 30, 60], ['60–89 days', 60, 90], ['90 days +', 90, Infinity]];
@@ -3514,6 +3563,8 @@ function onOverviewClick(e) {
   const ageBar = e.target.closest('[data-age]');
   if (ageBar) return openStockAge(Number(ageBar.dataset.age));
   if (e.target.closest('[data-ov-viewings]')) return openMonthViewings();
+  const sellerBar = e.target.closest('[data-seller]');
+  if (sellerBar) return openSellerCars(sellerBar.dataset.seller);
   const b = e.target.closest('[data-ov-tab]');
   if (!b || !b.dataset.ovTab) return;
   setView('main');
