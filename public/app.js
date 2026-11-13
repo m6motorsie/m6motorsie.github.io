@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '148';
+const APP_VERSION = '149';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1348,7 +1348,9 @@ function cardHTML(v) {
   // On Deliveries red means only "goes today / overdue"; elsewhere a sold car stands out
   const flagged = (v.status !== 'delivered' && v.urgent && tab !== 'sold') || (sold && tab !== 'sold') || (sold && dueToday(v)) || (tab === 'loan' && v.loan_due && dayDiff(v.loan_due) < 0)
     || (tab === 'bodyshop' && v.body_due && dayDiff(v.body_due) < 0);
-  return `<article class="card${flagged ? ' urgent' : ''}" data-id="${v.id}">
+  // Ready to go and nothing open on it: light green all round (wins over the red)
+  const readyGo = sold && v.status !== 'delivered' && v.ready_state === 'done' && !openIssues(v).length;
+  return `<article class="card${readyGo ? ' ready-go' : flagged ? ' urgent' : ''}" data-id="${v.id}">
     ${vehicleHeadHTML(v, isAdmin() ? ' data-act="edit" title="Add a photo"' : '', deliveryBox)}
     ${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}
     ${details ? `<dl class="details">${details}</dl>` : ''}
