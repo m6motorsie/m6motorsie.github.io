@@ -491,8 +491,10 @@ table.compact th:last-child, table.compact td:last-child { text-align: left; }
 @media print {
   body.printing-sheet > *:not(#printSheet) { display: none !important; }
   body.printing-sheet { background: #fff; color: #000; }
-  body.printing-sheet #printSheet { display: block; }
-  @page { size: A4 landscape; margin: 10mm; }
+  body.printing-sheet #printSheet { display: block; padding: 10mm; }
+  /* No page margin = no browser header / footer (date, page title, address, page numbers);
+     the sheet's own padding keeps the white border */
+  @page { size: A4 landscape; margin: 0; }
 }
 /* The sheet's own look — outside @media print so printDoc() can measure it on screen (one-page fit) */
 #printSheet { font: 11.5px/1.35 Inter, Arial, sans-serif; color: #000; background: #fff; }

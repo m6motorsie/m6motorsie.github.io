@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '153';
+const APP_VERSION = '154';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1550,7 +1550,7 @@ function printDoc({ title, summary, how, columns, rows, onePage = false }) {
   $('#printSheet').innerHTML = `
     <header>
       <div><h1>M6 Motors · ${esc(title)}</h1>
-        <p>${esc(now.toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))} · ${esc(summary)}</p></div>
+        ${onePage ? '' : `<p>${esc(now.toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))} · ${esc(summary)}</p>`}</div>
       <p class="how">${esc(how)}</p>
     </header>
     <table>
