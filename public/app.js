@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '154';
+const APP_VERSION = '155';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -2178,12 +2178,14 @@ async function openPhoto(v) {
 
 // Stock → "Photos": tick the cars that need photos and print a list for the day.
 // Tick several cars from a searchable list (Photos list, Refresh list)
-function openCarPicker({ title, intro = '', cars, allButton = false, actionLabel, onAction }) {
+// quick: an extra "tick these" link, e.g. { label: 'Added last 7 days', test: v => … }; note(v): a short line per car
+function openCarPicker({ title, intro = '', cars, allButton = false, quick = null, note = null, actionLabel, onAction }) {
   const picked = new Set();
   const sheet = openSheet(`${sheetHead(title)}
     ${intro ? `<p class="muted" style="margin:0 0 8px">${esc(intro)}</p>` : ''}
     <input type="search" id="pickSearch" placeholder="Search by plate, make or model" autocomplete="off">
     <div class="photo-tools">
+      ${quick && cars.some(quick.test) ? `<button type="button" class="link-btn" id="pickQuick">${esc(quick.label)} (${cars.filter(quick.test).length})</button>` : ''}
       ${allButton ? '<button type="button" class="link-btn" id="pickAll">Select all</button>' : ''}
       <button type="button" class="link-btn" id="pickNone">Clear</button>
       <span class="muted" id="pickCount">0 selected</span>
@@ -2201,7 +2203,7 @@ function openCarPicker({ title, intro = '', cars, allButton = false, actionLabel
       return `<label class="pick photo-pick">
         <input type="checkbox" data-id="${v.id}" ${picked.has(v.id) ? 'checked' : ''}>
         ${url ? `<img class="thumb" src="${esc(url)}" alt="">` : `<span class="thumb placeholder">${ICON.car}</span>`}
-        <span>${plateHTML(v)}<span class="muted">${esc([v.make, v.model].map(clean).filter(Boolean).join(' '))}${clean(v.color) ? ` · ${esc(v.color)}` : ''}${isSold(v) ? ' · SOLD' : ''}</span></span>
+        <span>${plateHTML(v)}<span class="muted">${esc([v.make, v.model].map(clean).filter(Boolean).join(' '))}${clean(v.color) ? ` · ${esc(v.color)}` : ''}${isSold(v) ? ' · SOLD' : ''}</span>${note && note(v) ? `<small class="pick-note">${note(v)}</small>` : ''}</span>
       </label>`;
     }).join('') : '<p class="empty">No cars match.</p>';
   };
@@ -2217,6 +2219,7 @@ function openCarPicker({ title, intro = '', cars, allButton = false, actionLabel
     e.target.checked ? picked.add(id) : picked.delete(id);
     update();
   });
+  $('#pickQuick', sheet)?.addEventListener('click', () => { cars.filter(quick.test).forEach(v => picked.add(v.id)); draw(); update(); });
   $('#pickAll', sheet)?.addEventListener('click', () => { $$('#pickList [data-id]', sheet).forEach(b => picked.add(b.dataset.id)); draw(); update(); });
   $('#pickNone', sheet).onclick = () => { picked.clear(); draw(); update(); };
   $('#pickGo', sheet).onclick = () => onAction(cars.filter(v => picked.has(v.id)));
@@ -2227,8 +2230,12 @@ const byMakeModel = (a, b) => [a.make, a.model].join(' ').localeCompare([b.make,
 function openPhotoPicker() {
   // Only cars on site (not out on loan or at the bodyshop)
   openCarPicker({
-    title: 'Photos list', intro: 'Tick the cars that need photos, then print the list.', allButton: true,
-    cars: [...S.vehicles.values()].filter(v => v.status === 'stock' && !['loan', 'bodyshop'].includes(v.hold)).sort(byMakeModel),
+    title: 'Photos list', intro: 'Newest cars first. Tick the cars that need photos, then print the list.', allButton: true,
+    // newest arrivals first; one tap ticks everything added in the last 7 days
+    cars: [...S.vehicles.values()].filter(v => v.status === 'stock' && !['loan', 'bodyshop'].includes(v.hold))
+      .sort((a, b) => new Date(b.created_at ?? 0) - new Date(a.created_at ?? 0) || byMakeModel(a, b)),
+    quick: { label: 'Added last 7 days', test: v => daysSince(v.created_at) <= 7 },
+    note: v => { const d = daysSince(v.created_at); return d <= 7 ? `<b>NEW</b> · added ${d === 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`}` : ''; },
     actionLabel: '🖨 Print photo list', onAction: printPhotoList,
   });
 }
