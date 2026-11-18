@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '152';
+const APP_VERSION = '153';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1541,7 +1541,7 @@ const plateCell = v => [v.reg_ie, v.reg_imp].map(clean).filter(Boolean).map(esc)
   + (v.urgent && v.status !== 'delivered' ? '<div class="urgent-tag">SOLD · PRIORITY</div>' : '');
 
 // rows: [{ group?: title } | { cells: [html…] }]
-function printDoc({ title, summary, how, columns, rows }) {
+function printDoc({ title, summary, how, columns, rows, onePage = false }) {
   const now = new Date();
   let n = 0;
   const body = rows.map(r => r.group
@@ -1559,8 +1559,20 @@ function printDoc({ title, summary, how, columns, rows }) {
     </table>
     <footer>Printed ${esc(fmtDate(now.toISOString()))} by ${esc(S.me?.display_name ?? '')}</footer>`;
 
+  // One page: lay the sheet out off screen at the printed width (A4 landscape
+  // less margins) and shrink it until it fits the page height (not below 55%)
+  const sheet = $('#printSheet');
+  sheet.classList.toggle('compact', onePage);
+  sheet.style.zoom = '';
+  if (onePage) {
+    Object.assign(sheet.style, { display: 'block', position: 'absolute', left: '-10000px', top: '0', width: '277mm' });
+    const pageH = 190 * 96 / 25.4 - 12;
+    const h = sheet.getBoundingClientRect().height;
+    Object.assign(sheet.style, { display: '', position: '', left: '', top: '', width: '' });
+    if (h > pageH) sheet.style.zoom = String(Math.max(0.55, pageH / h));
+  }
   document.body.classList.add('printing-sheet');
-  const done = () => { document.body.classList.remove('printing-sheet'); window.removeEventListener('afterprint', done); };
+  const done = () => { document.body.classList.remove('printing-sheet'); sheet.classList.remove('compact'); sheet.style.zoom = ''; window.removeEventListener('afterprint', done); };
   window.addEventListener('afterprint', done);
   window.print();
 }
@@ -1599,7 +1611,7 @@ function printSoldList() {
   printDoc({
     title: 'Sold cars', summary: `${plural(cars.length, 'car')} to prepare`,
     how: 'By delivery day, soonest first.',
-    columns: ['Plate', 'Car', 'Delivery', 'Notes'], rows,
+    columns: ['Plate', 'Car', 'Delivery', 'Notes'], rows, onePage: true,
   });
 }
 
