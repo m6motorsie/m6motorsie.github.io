@@ -14,6 +14,9 @@
 //   trade_wash_asked { trade_id } sales asked for a trade car to be washed → refresh people except who asked
 //   trade_wash_done  { trade_id } the trade car is washed                 → whoever asked (045_*.sql)
 //   supply_added { supply_id }   someone asked for supplies → "supplies alerts" people + sales team, except who asked
+//   viewings_soon {}             every 10 min (pg_cron, 050_*.sql): a viewing starts within the hour
+//                                → refresh people + who booked it, once per viewing
+//   (morning also lists today's viewings for the refresh people + who booked them — 050_*.sql)
 //   (morning also sends the open issues to the "issue alerts" people — 044_*.sql —
 //    and what's still to buy to the "supplies alerts" people — 048_*.sql)
 //
@@ -158,6 +161,60 @@ async function viewingBooked(vehicle_id: string) {
     url: "./?tab=viewing",
     tag: `viewing-${v.id}`,
   }, { onlyUsers: (people ?? []).map((p) => p.id as string), exceptUser: v.viewing_by ?? undefined }));
+}
+
+// Who hears about a viewing: the refresh people and whoever booked it
+async function viewingPeople(bookers: (string | null | undefined)[]) {
+  const { data: people } = await db.from("profiles").select("id").eq("does_refresh", true);
+  return [...new Set([...(people ?? []).map((p) => p.id as string), ...bookers.filter(Boolean) as string[]])];
+}
+const timeOf = (ts: string) => new Intl.DateTimeFormat("en-IE", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(ts));
+
+// Every 10 minutes: a viewing that starts within the hour gets one reminder
+// (not when it was only just booked — the booking push said it already)
+async function viewingsSoon() {
+  const now = Date.now();
+  const { data: cars } = await db.from("vehicles").select("*")
+    .gt("viewing_at", new Date(now).toISOString())
+    .lte("viewing_at", new Date(now + 60 * 60 * 1000).toISOString())
+    .neq("status", "delivered");
+  let sent = 0;
+  for (const v of cars ?? []) {
+    const { data: booked } = await db.from("push_log").select("sent_at")
+      .eq("key", `viewing_booked:${v.id}:${v.viewing_at}`).maybeSingle();
+    if (booked && now - new Date(booked.sent_at).getTime() < 20 * 60 * 1000) continue;
+    if (!(await claim(`viewing_soon:${v.id}:${v.viewing_at}`))) continue;
+    const mins = Math.max(1, Math.round((new Date(v.viewing_at).getTime() - now) / 60000));
+    const refreshed = v.refresh_state === "done";
+    const r = await send({
+      title: `⏰ Viewing at ${timeOf(v.viewing_at)} (in ${mins} min): ${carOf(v)}`,
+      body: [plateOf(v), refreshed ? "✓ refreshed" : v.refresh_state === "doing" ? "refresh under way" : "⚠ not refreshed yet",
+        v.viewing_by && `booked by ${await nameOf(v.viewing_by)}`, v.viewing_note].filter(Boolean).join(" · "),
+      url: "./?tab=viewing",
+      tag: `viewing-${v.id}`,
+    }, { onlyUsers: await viewingPeople([v.viewing_by]) });
+    sent += r.sent;
+  }
+  return json({ checked: cars?.length ?? 0, sent });
+}
+
+// 8am: today's viewings (booked days ago too) for the refresh people + who booked them
+async function morningViewings(date: string) {
+  const dayOf = (ts: string) => new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ts));
+  const from = new Date(Date.parse(`${date}T00:00:00Z`) - 2 * 3600e3).toISOString();
+  const to = new Date(Date.parse(`${date}T00:00:00Z`) + 26 * 3600e3).toISOString();
+  const { data: cars } = await db.from("vehicles").select("*")
+    .gte("viewing_at", from).lt("viewing_at", to).neq("status", "delivered").order("viewing_at");
+  const today = (cars ?? []).filter((v) => dayOf(v.viewing_at) === date);
+  if (!today.length) return null;
+  const lines = today.slice(0, 6).map((v) => [timeOf(v.viewing_at), carOf(v), plateOf(v), v.refresh_state === "done" ? "✓" : ""].filter(Boolean).join(" "));
+  if (today.length > 6) lines.push(`+${today.length - 6} more`);
+  return send({
+    title: `👀 Today: ${today.length} viewing${today.length === 1 ? "" : "s"}`,
+    body: lines.join("\n"),
+    url: "./?tab=viewing",
+    tag: `viewings-${date}`,
+  }, { onlyUsers: await viewingPeople(today.map((v) => v.viewing_by)) });
 }
 
 async function refresh(vehicle_id: string, event: "refresh_doing" | "refresh_done") {
@@ -310,6 +367,7 @@ async function morning() {
   if (!(await claim(`morning:${date}`))) return json({ skipped: "already sent today" });
   await morningIssues(date).catch((err) => console.error("morning issues failed", (err as Error).message));
   await morningSupplies(date).catch((err) => console.error("morning supplies failed", (err as Error).message));
+  await morningViewings(date).catch((err) => console.error("morning viewings failed", (err as Error).message));
   const { data: cars } = await db.from("vehicles").select("*").eq("status", "in_prep");
   const sold = cars ?? [];
   const today = sold.filter((v) => v.delivery_date === date)
@@ -336,6 +394,7 @@ Deno.serve(async (req) => {
   }
   const { vehicle_id, issue_id, trade_id, supply_id, event = "new_stock" } = await req.json().catch(() => ({}));
   if (event === "morning") return morning();
+  if (event === "viewings_soon") return viewingsSoon();
   if (event === "supply_added") return supply_id ? supplyAdded(supply_id) : json({ error: "bad request" }, 400);
   if (event === "trade_wash_asked" || event === "trade_wash_done") {
     return trade_id ? tradeWash(trade_id, event) : json({ error: "bad request" }, 400);

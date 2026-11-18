@@ -253,6 +253,8 @@ main .tabs, main .toolbar { max-width: 900px; margin-left: auto; margin-right: a
 .delivery-box.now { background: var(--urgent); border-color: var(--urgent); color: #fff; }
 .delivery-box.none { color: var(--muted); border-style: dashed; }
 .delivery-box.none b { font-size: 13px; font-weight: 600; }
+.delivery-box.tap { cursor: pointer; }
+.delivery-box.tap:active { transform: scale(.96); }
 .chip.ok { background: var(--done-bg); border-color: var(--done-bd); color: var(--done-fg); }
 .chip.prep-state { background: var(--doing-bg); border-color: var(--doing-bd); color: var(--doing-fg); font-weight: 600; }
 .chip.body { background: #b4541a; border-color: #b4541a; color: #fff; font-weight: 700; }
@@ -833,10 +835,14 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 
 /* Polish: chip, buttons and the queue number; issue lines */
 .chip.polish { background: #fef3c7; border-color: #f59e0b; color: #92400e; font-weight: 700; }
+.chip.polished { background: #fef9c3; border-color: #eab308; color: #713f12; font-weight: 700; }
+.chip.polishing { border-color: #eab308; color: #a16207; font-weight: 700; }
 .btn.polish-btn { border-color: #d97706; color: #b45309; }
 .btn.polish-btn.on { background: #d97706; border-color: #d97706; color: #fff; }
 @media (prefers-color-scheme: dark) {
   .chip.polish { background: #3a2a0a; color: #fcd34d; }
+  .chip.polished { background: #3a330a; color: #fde047; }
+  .chip.polishing { color: #fde047; }
   .btn.polish-btn:not(.on) { color: #fbbf24; }
 }
 .queue-no { display: inline-block; min-width: 30px; font-weight: 800; font-size: 15px; color: var(--muted); }

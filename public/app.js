@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '149';
+const APP_VERSION = '150';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1044,6 +1044,42 @@ async function cycleRefresh(v, btn, next = v.refresh_state === 'doing' ? 'done' 
   renderAll();
 }
 
+// Tap the delivery box on a sold car: change just the day and time (managers, like Edit)
+function openDeliveryDateForm(v) {
+  const car = [v.make, v.model].map(clean).filter(Boolean).join(' ');
+  const sheet = openSheet(`<form class="form" id="delForm" novalidate>
+    ${sheetHead('Delivery date')}
+    <div class="hold-car">${plateHTML(v)}<span class="muted">${esc(car)}</span></div>
+    <div class="grid2">
+      <label>Day<input type="date" name="delivery_date" value="${esc(v.delivery_date ?? '')}"></label>
+      <label>Time<input name="delivery_time" value="${esc(v.delivery_time)}" placeholder="e.g. 5PM"></label>
+    </div>
+    <button type="button" class="link-btn" id="delNoDate" style="justify-self:start">✕ No date yet (not confirmed)</button>
+    <p class="form-error" id="delError" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>`);
+  const form = $('#delForm', sheet);
+  $('#delNoDate', form).addEventListener('click', () => { form.elements.delivery_date.value = ''; form.elements.delivery_time.value = ''; });
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const f = form.elements;
+    const btn = form.querySelector('[type=submit]');
+    btn.disabled = true;
+    try {
+      await updateVehicle(v.id, { delivery_date: f.delivery_date.value || null, delivery_time: clean(f.delivery_time.value) });
+      closeSheet();
+      renderAll();
+      toast(f.delivery_date.value ? `Delivery: ${dayName(f.delivery_date.value)}${clean(f.delivery_time.value) ? ` · ${clean(f.delivery_time.value)}` : ''}` : 'No delivery date yet');
+    } catch (err) {
+      btn.disabled = false;
+      const el = $('#delError', form); el.textContent = errorText(err); el.hidden = false;
+    }
+  };
+}
+
 function openViewingForm(v) {
   const editing = inViewing(v);
   const when = editing ? new Date(v.viewing_at) : new Date(Date.now() + 60 * 60 * 1000);
@@ -1057,7 +1093,7 @@ function openViewingForm(v) {
       <label>Time<input type="time" name="view_time" value="${time}" required></label>
     </div>
     <label>Note (optional)<input name="view_note" value="${esc(v.viewing_note)}" placeholder="e.g. customer wants to see the boot space"></label>
-    <p class="hint" style="margin:0">The refresh team gets a notification, and you’ll be told when the car is refreshed.</p>
+    <p class="hint" style="margin:0">The refresh team gets a notification now, at 8am on the day and an hour before — and you’ll be told when the car is refreshed.</p>
     <p class="form-error" id="viewError" hidden></p>
     <div class="sheet-actions">
       ${editing ? `<button type="button" class="btn ghost danger" id="viewClear">Viewing done</button><span class="spacer"></span>` : ''}
@@ -1263,14 +1299,18 @@ function cardHTML(v) {
     const time = clean(v.delivery_time);
     const cls = diff === null ? '' : diff <= 0 ? ' now' : diff === 1 ? ' soon' : '';
     const label = diff === null ? 'Delivery' : diff < 0 ? 'Overdue' : diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : 'Delivery';
+    const tap = isAdmin() ? ' data-act="deliverydate" role="button" tabindex="0" title="Tap to change the delivery date / time"' : '';
     deliveryBox = day
-      ? `<div class="delivery-box${cls}"><small>${label}</small><b>${esc(day)}</b>${time ? `<span>${esc(time)}</span>` : ''}</div>`
-      : '<div class="delivery-box none"><small>Delivery</small><b>No date</b></div>';
+      ? `<div class="delivery-box${cls}${tap ? ' tap' : ''}"${tap}><small>${label}</small><b>${esc(day)}</b>${time ? `<span>${esc(time)}</span>` : ''}</div>`
+      : `<div class="delivery-box none${tap ? ' tap' : ''}"${tap}><small>Delivery</small><b>No date</b></div>`;
   }
   if (sold) {
     chips.push(v.stock_status === 'due_in' ? '<span class="chip warn">Due in</span>' : '<span class="chip">On site</span>');
   }
   if (sold && v.ready_state === 'done') chips.push(`<span class="chip ok ready">✓ READY TO GO</span>`);
+  // Polished: everyone (and the sold-cars person especially) can see it at a glance
+  if (v.status !== 'delivered' && v.polish_state === 'done') chips.push(`<span class="chip polished">✨ POLISHED${v.polish_by ? ` · ${esc(nameOf(v.polish_by))}` : ''}</span>`);
+  else if (v.status !== 'delivered' && v.polish_state === 'doing') chips.push(`<span class="chip polishing">✨ POLISHING${v.polish_by ? ` · ${esc(nameOf(v.polish_by))}` : ''}</span>`);
   if (v.status !== 'delivered' && v.services.length && v.done_at && v.ready_state !== 'done') {
     if (sold) {
       const prep = v.ready_state === 'doing' ? 'prep in progress' : 'prep not started';
@@ -1634,6 +1674,7 @@ async function onListClick(e) {
 
   if (act === 'svc') return cycleService(v, btn.dataset.key, btn);
   if (act === 'edit') return isAdmin() && openVehicleForm({ vehicle: v });
+  if (act === 'deliverydate') return isAdmin() && openDeliveryDateForm(v);
   if (act === 'sell') return salesManager() && openVehicleForm({ vehicle: v, convert: true });
   if (act === 'photo') return openPhoto(v);
   if (act === 'issues') return openIssueSheet(v);
@@ -2107,6 +2148,9 @@ function openSheet(html) {
   sheet.innerHTML = html;
   $('#sheetBackdrop').hidden = false;
   document.body.style.overflow = 'hidden';
+  // Always start at the top (photo first), not where the last sheet was scrolled to
+  sheet.scrollTop = 0;
+  requestAnimationFrame(() => { sheet.scrollTop = 0; });
   return sheet;
 }
 
