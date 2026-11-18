@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '150';
+const APP_VERSION = '151';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1540,14 +1540,6 @@ const carCell = v => `<strong>${esc([v.make, v.model].map(clean).filter(Boolean)
 const plateCell = v => [v.reg_ie, v.reg_imp].map(clean).filter(Boolean).map(esc).join('<br>')
   + (v.urgent && v.status !== 'delivered' ? '<div class="urgent-tag">SOLD · PRIORITY</div>' : '');
 
-function jobsCell(v) {
-  return SERVICES.filter(s => v.services.includes(s.key)).map(s => {
-    const state = v[`${s.key}_state`];
-    if (state === 'done') return `<span class="done">✓ ${esc(s.label)} <small>(${esc(nameOf(v[`${s.key}_by`]))})</small></span>`;
-    return `<span>☐ ${esc(s.label)}${state === 'doing' ? ` <small>(started: ${esc(nameOf(v[`${s.key}_by`]))})</small>` : ''}</span>`;
-  }).join('') || '<span class="muted">No services</span>';
-}
-
 // rows: [{ group?: title } | { cells: [html…] }]
 function printDoc({ title, summary, how, columns, rows }) {
   const now = new Date();
@@ -1588,28 +1580,22 @@ function printSoldList() {
   for (const v of cars) {
     const g = deliveryGroup(v);
     if (g.key !== current) { current = g.key; rows.push({ group: g.title }); }
-    const where = (v.hold === 'loan' ? '<strong>ON LOAN</strong>'
-      : v.hold === 'bodyshop' ? '<strong>AT BODYSHOP</strong>'
-      : v.stock_status === 'due_in' ? '<strong>NOT ON SITE YET</strong>' : 'On site')
-      + (v.ready_state === 'done' ? '<br><strong>✓ READY TO GO</strong>'
-        : v.ready_state === 'doing' ? `<br>Prep: ${esc(nameOf(v.ready_by))}` : '');
     const notes = [clean(v.notes), clean(v.mechanical_notes) && `Mechanical: ${clean(v.mechanical_notes)}`,
       clean(v.vrt_nct) && `VRT/NCT: ${clean(v.vrt_nct)}`,
       v.services.includes('bodykit') && `Body kit: ${clean(v.bodykit_note) || 'requested'}`, inDent(v) && `Dent: ${clean(v.dent_notes) || 'on the dent list'}`,
       ...openIssues(v).map(i => `Issue: ${issueText(i)}`)]
       .filter(Boolean).map(esc).join('<br>');
+    // Just plate, car + colour and notes, under the delivery-day headings (owner's choice, v151)
     rows.push({ cells: [
-      { html: plateCell(v), cls: 'plate-cell' },
-      { html: `${carCell(v)}${clean(v.seller) ? `<br><small>Sold by ${esc(v.seller)}</small>` : ''}` },
-      { html: `${esc(deliveryLabel(v) || '—')}<br><small>${where}</small>` },
-      { html: jobsCell(v), cls: 'svc-cell' },
+      { html: [v.reg_ie, v.reg_imp].map(clean).filter(Boolean).map(esc).join('<br>'), cls: 'plate-cell' },
+      { html: carCell(v) },
       { html: notes, cls: 'notes-cell' },
     ] });
   }
   printDoc({
     title: 'Sold cars', summary: `${plural(cars.length, 'car')} to prepare`,
-    how: 'Work top to bottom. Tick ☐ when a job is done — and tap it in the app too.',
-    columns: ['Plate', 'Car', 'Delivery', 'Jobs', 'Notes'], rows,
+    how: 'By delivery day, soonest first.',
+    columns: ['Plate', 'Car', 'Notes'], rows,
   });
 }
 
@@ -4229,7 +4215,7 @@ const HELP = [
     <p>Swipe left / right on the list to change tab.</p>` },
   { id: 'sold', title: 'Deliveries & the daily sheet', tabs: ['sold'], body: `
     <p>The Deliveries tab groups the sold cars by delivery day: <b>Overdue</b>, <b>Today</b>, <b>Tomorrow</b>…</p>
-    <p>Each morning the manager prints the day’s job sheet (<b>🖨 Print deliveries list</b>). Work top to bottom and tick ☐ as you go — and tap the job in the app too.</p>
+    <p>Each morning the manager prints the day’s job sheet (<b>🖨 Print deliveries list</b>). It lists the cars by delivery day — plate, car and notes; the jobs are tapped in the app.</p>
     <p>Cars going out <b>today</b> have a red outline, and the red number on the Deliveries tab says how many.</p>
     <p><b>Delivery prep</b> (the sold-cars person): tap <b>▶ Start prep</b> when you take the car — the boss gets a notification — and <b>✓ Ready to go</b> when it’s done. When the customer takes it, the sales team taps <b>✓ Delivered</b>.</p>` },
   { id: 'refresh', title: 'Refresh list', tabs: ['refresh'], body: `

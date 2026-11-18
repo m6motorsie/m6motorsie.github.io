@@ -505,8 +505,6 @@ table.compact th:last-child, table.compact td:last-child { text-align: left; }
   #printSheet .num { width: 24px; font-weight: 700; }
   #printSheet .plate-cell { font: 700 15px/1.2 "Barlow Condensed", Arial, sans-serif; letter-spacing: .04em; white-space: nowrap; }
   #printSheet .urgent-tag { display: inline-block; margin-top: 3px; border: 1.5px solid #000; padding: 0 4px; font: 700 10px Inter, Arial, sans-serif; }
-  #printSheet .svc-cell span { display: block; font-size: 13px; line-height: 1.6; }
-  #printSheet .svc-cell .done { color: #555; }
   #printSheet small { font-size: 10px; }
   #printSheet .notes-cell { width: 26%; }
   #printSheet .tick { font-size: 20px; line-height: 1; }
