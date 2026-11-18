@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '151';
+const APP_VERSION = '152';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1585,17 +1585,21 @@ function printSoldList() {
       v.services.includes('bodykit') && `Body kit: ${clean(v.bodykit_note) || 'requested'}`, inDent(v) && `Dent: ${clean(v.dent_notes) || 'on the dent list'}`,
       ...openIssues(v).map(i => `Issue: ${issueText(i)}`)]
       .filter(Boolean).map(esc).join('<br>');
-    // Just plate, car + colour and notes, under the delivery-day headings (owner's choice, v151)
+    // No jobs column, no Ready to go and no SOLD · PRIORITY tag (owner's choice, v152)
+    const where = v.hold === 'loan' ? '<strong>ON LOAN</strong>'
+      : v.hold === 'bodyshop' ? '<strong>AT BODYSHOP</strong>'
+      : v.stock_status === 'due_in' ? '<strong>NOT ON SITE YET</strong>' : 'On site';
     rows.push({ cells: [
       { html: [v.reg_ie, v.reg_imp].map(clean).filter(Boolean).map(esc).join('<br>'), cls: 'plate-cell' },
-      { html: carCell(v) },
+      { html: `${carCell(v)}${clean(v.seller) ? `<br><small>Sold by ${esc(v.seller)}</small>` : ''}` },
+      { html: `${esc(deliveryLabel(v) || '—')}<br><small>${where}</small>` },
       { html: notes, cls: 'notes-cell' },
     ] });
   }
   printDoc({
     title: 'Sold cars', summary: `${plural(cars.length, 'car')} to prepare`,
     how: 'By delivery day, soonest first.',
-    columns: ['Plate', 'Car', 'Notes'], rows,
+    columns: ['Plate', 'Car', 'Delivery', 'Notes'], rows,
   });
 }
 
@@ -4215,7 +4219,7 @@ const HELP = [
     <p>Swipe left / right on the list to change tab.</p>` },
   { id: 'sold', title: 'Deliveries & the daily sheet', tabs: ['sold'], body: `
     <p>The Deliveries tab groups the sold cars by delivery day: <b>Overdue</b>, <b>Today</b>, <b>Tomorrow</b>…</p>
-    <p>Each morning the manager prints the day’s job sheet (<b>🖨 Print deliveries list</b>). It lists the cars by delivery day — plate, car and notes; the jobs are tapped in the app.</p>
+    <p>Each morning the manager prints the day’s job sheet (<b>🖨 Print deliveries list</b>). It lists the cars by delivery day — plate, car, delivery and notes; the jobs are tapped in the app.</p>
     <p>Cars going out <b>today</b> have a red outline, and the red number on the Deliveries tab says how many.</p>
     <p><b>Delivery prep</b> (the sold-cars person): tap <b>▶ Start prep</b> when you take the car — the boss gets a notification — and <b>✓ Ready to go</b> when it’s done. When the customer takes it, the sales team taps <b>✓ Delivered</b>.</p>` },
   { id: 'refresh', title: 'Refresh list', tabs: ['refresh'], body: `
