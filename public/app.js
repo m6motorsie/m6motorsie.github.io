@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '155';
+const APP_VERSION = '156';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1739,7 +1739,7 @@ function announceMove(before, after) {
   else toast(`Moved to ${TAB_TITLE[to]}`, { action: { label: 'Show', run: () => followCard(after.id, to) } });
 }
 
-function followCard(id, tab) {
+function followCard(id, tab, msg = `Moved to ${TAB_TITLE[tab]}`) {
   S.search = '';
   $('#search').value = '';
   $('#searchClear').hidden = true;
@@ -1752,7 +1752,15 @@ function followCard(id, tab) {
     void card.offsetWidth; // restart the animation
     card.classList.add('flash');
   });
-  toast(`Moved to ${TAB_TITLE[tab]}`);
+  if (msg) toast(msg);
+}
+
+// A notification about one car (?car=<id>): open its card wherever it is and flash it
+function showCar(id) {
+  const v = S.vehicles.get(id);
+  if (!v) return toast('That car isn’t in the app any more.');
+  setView('main');
+  followCard(id, tabOf(v), '');
 }
 
 async function cycleService(v, key, btn) {
@@ -2876,8 +2884,10 @@ function polishListHTML() {
         : salesManager() ? `<button class="btn small ghost" data-act="polishno">✕ No</button><button class="btn small polish-btn on" data-act="polishyes">✨ Approve</button>` : '<span class="muted">Waiting for sales</span>'}</div>
     </div>`;
   const parts = [];
+  const answer = salesManager() && suggested.length;  // the sales managers decide them: show those first
+  if (answer) parts.push(`<section class="deliv-group dent-group"><h3>✨ Suggested — your answer needed <span class="count">${suggested.length}</span></h3>${suggested.map(v => row(v, 0)).join('')}</section>`);
   if (queue.length) parts.push(`<section class="deliv-group dent-group"><h3>✨ To polish <span class="count">${queue.length}</span></h3>${queue.map((v, i) => row(v, i + 1)).join('')}</section>`);
-  if (suggested.length) parts.push(`<section class="deliv-group dent-group"><h3>Suggested — waiting for sales <span class="count">${suggested.length}</span></h3>${suggested.map(v => row(v, 0)).join('')}</section>`);
+  if (suggested.length && !answer) parts.push(`<section class="deliv-group dent-group"><h3>Suggested — waiting for sales <span class="count">${suggested.length}</span></h3>${suggested.map(v => row(v, 0)).join('')}</section>`);
   return parts.join('') || `<p class="empty">${q ? 'No cars match your search.' : 'Nothing to polish right now. 👍'}</p>`;
 }
 
@@ -4437,20 +4447,22 @@ async function onSessionChange() {
   syncPush();
   touchLastSeen();
   // The sales managers (Alan, Eanna, Derek) start on the Overview when the app opens
-  if (isAdmin() && canTestdrive()) {
+  const params = new URLSearchParams(location.search);
+  const linked = params.get('tab') || params.get('supplies') || params.get('car');
+  if (isAdmin() && canTestdrive() && !linked) {
     let shown = false;
     try { shown = sessionStorage.getItem('m6.overviewShown') === '1'; sessionStorage.setItem('m6.overviewShown', '1'); } catch {}
     if (!shown) setView('overview');
   }
   // A mechanic starts on the Issues list (unless a notification opened another tab)
-  const params = new URLSearchParams(location.search);
-  if (mechanicOnly() && !params.get('tab') && !params.get('supplies')) {
+  if (mechanicOnly() && !linked) {
     let shown = false;
     try { shown = sessionStorage.getItem('m6.issuesShown') === '1'; sessionStorage.setItem('m6.issuesShown', '1'); } catch {}
     if (!shown) switchTab('issues');
   }
   // A supplies notification (?supplies=1) opens the Supplies list
   if (params.get('supplies')) setView('supplies');
+  if (params.get('car')) showCar(params.get('car'));
 }
 
 function wireUi() {
@@ -4472,6 +4484,7 @@ function wireUi() {
     if (e.data?.type !== 'open') return;
     const params = new URL(e.data.url).searchParams;
     if (params.get('supplies')) return setView('supplies');
+    if (params.get('car')) return showCar(params.get('car'));
     const tab = params.get('tab');
     if (TAB_TITLE[tab]) { setView('main'); switchTab(tab); }
   });
@@ -4626,8 +4639,9 @@ function loadVersion(latest) {
     if (sessionStorage.getItem('m6.updatedTo') === latest) return false;
     sessionStorage.setItem('m6.updatedTo', latest);
   } catch {}
-  const tab = new URLSearchParams(location.search).get('tab');
-  location.replace(`./?u=${latest}${tab ? `&tab=${tab}` : ''}`);
+  const link = new URLSearchParams(location.search);
+  const tab = link.get('tab'), car = link.get('car');
+  location.replace(`./?u=${latest}${tab ? `&tab=${tab}` : ''}${car ? `&car=${encodeURIComponent(car)}` : ''}`);
   return true;
 }
 

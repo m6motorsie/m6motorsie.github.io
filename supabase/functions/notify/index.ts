@@ -305,7 +305,7 @@ async function polishSuggested(vehicle_id: string) {
   return json(await send({
     title: `✨ ${who} suggests a polish: ${carOf(v)}`,
     body: [plateOf(v), v.polish_suggest_note, "approve it on the car"].filter(Boolean).join(" · "),
-    url: "./?tab=stock",
+    url: `./?car=${v.id}`,  // opens that car's card (app v156+)
     tag: `polish-suggest-${v.id}`,
   }, { onlyUsers: (people ?? []).map((p) => p.id as string), exceptUser: v.polish_suggested_by ?? undefined }));
 }
