@@ -588,6 +588,19 @@ table.compact th:last-child, table.compact td:last-child { text-align: left; }
 .supply-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .supply-row.done strong { text-decoration: line-through; opacity: .7; }
 @media (max-width: 520px) { .supply-row { flex-wrap: wrap; } .supply-actions { width: 100%; } }
+.mats-hint { margin: 8px 0; padding: 10px 12px; border: 1px solid #d97706; border-radius: 10px; background: #fffbeb; color: #78350f; font-size: 13.5px; }
+.mats-hint > strong { display: block; margin-bottom: 4px; }
+.mats-hint a { color: inherit; }
+.mats-fit { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 0; border-top: 1px dashed #f59e0b; }
+.mats-fit:first-of-type { border-top: 0; }
+.mats-fit small { color: #92400e; }
+.mats-add { margin-top: 10px; }
+.mats-add summary { cursor: pointer; list-style: none; }
+.mats-add summary::-webkit-details-marker { display: none; }
+@media (prefers-color-scheme: dark) {
+  .mats-hint { background: #2a1d07; color: #fde68a; border-color: #b45309; }
+  .mats-fit small { color: #fcd34d; }
+}
 
 /* ---------- Notifications ---------- */
 .push-banner {

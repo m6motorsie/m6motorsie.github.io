@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '156';
+const APP_VERSION = '157';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -231,6 +231,8 @@ const S = {
   channel: null,
   supplies: [],
   suppliesReady: false,
+  mats: [],                 // sets of mats on the shelf (051_*.sql)
+  matsReady: false,
   myMonth: null,            // my finished jobs this month (show_count), or null
   issues: new Map(),        // vehicle id → open issues (024_*.sql)
   issuesReady: false,
@@ -288,7 +290,7 @@ async function loadAll() {
   S.me = S.profiles.get(S.session.user.id) ?? null;
   S.vehicles = new Map(v.data.map(x => [x.id, withJobs(x)]));
   S.syncedAt = syncMark();
-  await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMyMonth(), loadIssues(), loadWorkLog(), loadTrades().then(refreshPhotoUrls)]);
+  await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMats(), loadMyMonth(), loadIssues(), loadWorkLog(), loadTrades().then(refreshPhotoUrls)]);
 }
 
 // Trade cars (managers + sales only; others get nothing back). Finished ones
@@ -343,6 +345,14 @@ async function loadIssues() {
     if (!S.issues.has(i.vehicle_id)) S.issues.set(i.vehicle_id, []);
     S.issues.get(i.vehicle_id).push(i);
   }
+}
+
+// Mats on the shelf (taken ones drop off). Loaded separately so the app still
+// works before 051_*.sql runs.
+async function loadMats() {
+  const { data, error } = await sb.from('mat_stock').select('*').is('used_at', null).order('added_at');
+  S.matsReady = !error;
+  S.mats = data ?? [];
 }
 
 // Supplies requested by the team. Loaded separately so the app still works
@@ -464,7 +474,14 @@ function queueRender() {
 
 function subscribe() {
   sb.getChannels().forEach(ch => sb.removeChannel(ch));
-  S.channel = sb.channel(`prep-${Date.now()}`)
+  const ch = sb.channel(`prep-${Date.now()}`);
+  // (only once 051_*.sql has run — a table that doesn't exist yet would break the channel)
+  if (S.matsReady) ch.on('postgres_changes', { event: '*', schema: 'public', table: 'mat_stock' }, async () => {
+    await loadMats();
+    renderAll();
+    if ($('#issueSheet')) drawMatsHint();
+  });
+  S.channel = ch
     .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, payload => {
       if (payload.eventType === 'DELETE') S.vehicles.delete(payload.old.id);
       else upsertLocal(payload.new);
@@ -875,6 +892,75 @@ function workLogHTML(v) {
     <span>🔧</span><span class="worklog-text"><strong>${esc(last.note)}</strong> <small>${esc(nameOf(last.created_by))} · ${esc(fmtDate(last.created_at, false))}</small></span>
     ${log.length > 1 ? `<span class="worklog-more">+${log.length - 1}</span>` : ''}
   </button>`;
+}
+
+// ---------------------------------------------------------------------
+// Mats on the shelf (051_*.sql): sets already bought. "Mats missing" on a car
+// with a set that fits → the app says so, and "Use for this car" keeps it for
+// that car (the issue then says "from the shelf") — so nobody orders them again.
+// ---------------------------------------------------------------------
+// Fits: same make (or a universal set), and the same model or "any model"
+function matsFor(make, model) {
+  const mk = norm(make), md = norm(model);
+  return S.mats.filter(m => {
+    if (!norm(m.make)) return true;
+    if (!mk || norm(m.make) !== mk) return false;
+    const mm = norm(m.model);
+    return !mm || (!!md && (md.includes(mm) || mm.includes(md)));
+  }).sort((a, b) => (!norm(a.make) - !norm(b.make)) || (!norm(a.model) - !norm(b.model)));
+}
+const matName = m => [m.make, m.model].map(clean).filter(Boolean).join(' ') || 'Universal';
+const matText = m => [matName(m), clean(m.description)].filter(Boolean).join(' — ');
+const FROM_SHELF = 'From the shelf:';
+const matsSorted = i => i.kind === 'mats' && clean(i.note).includes(FROM_SHELF);
+
+// Lines "🟫 On the shelf: … [Use for this car]" for a car (issue sheet, Issues list)
+function matsFitHTML(v, { buttons = true } = {}) {
+  const fits = S.matsReady ? matsFor(v.make, v.model) : [];
+  if (!fits.length) return '';
+  return `<div class="mats-hint"><strong>🟫 ${fits.length === 1 ? 'A set of mats on the shelf may fit' : `${fits.length} sets of mats on the shelf may fit`} — don’t order, check these first:</strong>
+    ${fits.slice(0, 4).map(m => `<div class="mats-fit"><span>${esc(matText(m))}${clean(m.place) ? ` <small class="muted">· ${esc(m.place)}</small>` : ''}</span>
+      ${buttons ? `<button type="button" class="btn small accent" data-act="matuse" data-mat="${m.id}">Use for this car</button>` : ''}</div>`).join('')}
+  </div>`;
+}
+
+// Take a set off the shelf for a car; the car's "Mats missing" issue says where they are
+async function useMat(v, matId) {
+  const m = S.mats.find(x => x.id === matId);
+  if (!m) return toast('Those mats aren’t on the shelf any more.');
+  const { data: took, error } = await sb.from('mat_stock')
+    .update({ used_at: new Date().toISOString(), vehicle_id: v.id }).eq('id', matId).is('used_at', null).select();
+  if (error) return toast(errorText(error), { error: true });
+  if (!took?.length) { await loadMats(); renderAll(); return toast('Someone has just taken those mats.'); }
+  const line = `${FROM_SHELF} ${matText(m)}${clean(m.place) ? ` (${clean(m.place)})` : ''} — fit them, don’t order`;
+  const open = openIssues(v).find(i => i.kind === 'mats' && !matsSorted(i));
+  const before = open?.note ?? null;
+  const res = open
+    ? await sb.from('vehicle_issues').update({ note: [clean(open.note), line].filter(Boolean).join(' · ') }).eq('id', open.id).select().single()
+    : await sb.from('vehicle_issues').insert({ vehicle_id: v.id, kind: 'mats', note: line }).select().single();
+  if (res.error) toast(`Mats kept for the car, but the issue wasn’t updated: ${errorText(res.error)}`, { error: true });
+  await Promise.all([loadMats(), loadIssues()]);
+  renderAll();
+  if ($('#issueSheet')) { drawIssueList(); drawMatsHint(); }
+  toast(`Mats kept for ${carName(v)} — no need to order`, { action: { label: 'Undo', run: async () => {
+    await sb.from('mat_stock').update({ used_at: null }).eq('id', matId);
+    if (res.data) {
+      if (open) await sb.from('vehicle_issues').update({ note: before ?? '' }).eq('id', res.data.id);
+      else await sb.from('vehicle_issues').delete().eq('id', res.data.id);
+    }
+    await Promise.all([loadMats(), loadIssues()]); renderAll();
+    if ($('#issueSheet')) { drawIssueList(); drawMatsHint(); }
+  } } });
+}
+
+// In the issue sheet: shown while "Mats missing" is picked, or the car has an open mats issue
+function drawMatsHint() {
+  const box = $('#matsHint');
+  const v = S.vehicles.get(issueSheetFor);
+  if (!box || !v) return;
+  const picked = $('#issueForm [name=kind]:checked')?.value === 'mats';
+  const waiting = openIssues(v).some(i => i.kind === 'mats' && !matsSorted(i));
+  box.innerHTML = picked || waiting ? matsFitHTML(v) : '';
 }
 
 function issuesHTML(v) {
@@ -1673,6 +1759,7 @@ async function onListClick(e) {
   const v = S.vehicles.get(id);
   if (!v) return;
   const act = btn.dataset.act;
+  if (act === 'matuse') { btn.disabled = true; return useMat(v, Number(btn.dataset.mat)); }
 
   if (act === 'svc') return cycleService(v, btn.dataset.key, btn);
   if (act === 'edit') return isAdmin() && openVehicleForm({ vehicle: v });
@@ -1984,6 +2071,7 @@ function openIssueSheet(v) {
     ${sheetHead('Issues')}
     <div class="hold-car">${plateHTML(v)}<span class="muted">${esc(car)}</span></div>
     <div id="issueList"></div>
+    <div id="matsHint"></div>
     <form id="issueForm" class="form issue-form" novalidate${mechanicOnly() ? ' hidden' : ''}>
       <div class="section-label">Add an issue</div>
       <div class="pills">${Object.entries(ISSUE_KINDS).map(([k, x], n) =>
@@ -1998,10 +2086,15 @@ function openIssueSheet(v) {
     ${mechanicOnly() ? '<div class="sheet-actions"><button type="button" class="btn ghost" data-close>Close</button></div>' : ''}
   </div>`);
   drawIssueList();
+  drawMatsHint();
 
   const form = $('#issueForm', sheet);
   form.addEventListener('change', e => {
-    if (e.target.name === 'kind') form.elements.note.placeholder = ISSUE_KINDS[e.target.value].hint;
+    if (e.target.name === 'kind') { form.elements.note.placeholder = ISSUE_KINDS[e.target.value].hint; drawMatsHint(); }
+  });
+  $('#matsHint', sheet).addEventListener('click', e => {
+    const b = e.target.closest('[data-act="matuse"]');
+    if (b) { b.disabled = true; useMat(v, Number(b.dataset.mat)); }
   });
   form.onsubmit = async e => {
     e.preventDefault();
@@ -2019,7 +2112,8 @@ function openIssueSheet(v) {
     await loadIssues();
     renderAll();
     drawIssueList();
-    toast('Issue added');
+    drawMatsHint();
+    toast(kind === 'mats' && S.matsReady && matsFor(v.make, v.model).length ? 'Issue added — mats on the shelf may fit (see above)' : 'Issue added');
   };
   $('#issueList', sheet).addEventListener('click', async e => {
     const b = e.target.closest('[data-issue]');
@@ -2033,6 +2127,7 @@ function openIssueSheet(v) {
     await Promise.all([loadIssues(), loadWorkLog()]);
     renderAll();
     drawIssueList();
+    drawMatsHint();
     if (b.dataset.do === 'fixed') {
       toast('Marked as fixed', { action: { label: 'Undo', run: async () => {
         await sb.from('vehicle_issues').update({ fixed_at: null }).eq('id', id);
@@ -2446,8 +2541,18 @@ function openVehicleForm({ vehicle = null, convert = false } = {}) {
     arrivalNotes.innerHTML = $$('[data-arrival]:checked', form).map(b => {
       const k = b.dataset.arrival, x = ISSUE_KINDS[k];
       return `<label>${x.icon} ${esc(x.label)}<input data-arrival-note="${k}" value="${esc(typed[k] ?? '')}" placeholder="${esc(x.hint)}" autocomplete="off"></label>`;
-    }).join('');
+    }).join('') + '<div id="arrivalMats"></div>';
+    arrivalMats();
   });
+  // Mats missing ticked and a set on the shelf fits → say so (it's kept for the car from ⚠ Issues once saved)
+  const arrivalMats = () => {
+    const box = $('#arrivalMats', form);
+    if (!box) return;
+    const fake = { make: form.elements.make.value, model: form.elements.model.value };
+    const html = $('[data-arrival="mats"]:checked', form) ? matsFitHTML(fake, { buttons: false }) : '';
+    box.innerHTML = html ? html + '<p class="hint" style="margin:4px 0 0">After saving, tap <b>⚠ Issues</b> on the car → <b>Use for this car</b>.</p>' : '';
+  };
+  ['make', 'model'].forEach(n => form.elements[n]?.addEventListener('input', arrivalMats));
   const arrivalIssues = () => $$('[data-arrival]:checked', form).map(b => ({
     kind: b.dataset.arrival,
     note: clean($(`[data-arrival-note="${b.dataset.arrival}"]`, form)?.value),
@@ -2804,7 +2909,8 @@ function issuesListHTML() {
         <span class="dent-where">${esc(whereLabel(v))}</span>
       </div>
       <div class="dent-fix"><strong>${esc(clean(i.note) || ISSUE_KINDS[i.kind]?.label || 'Issue')}</strong>
-        <small class="muted"> · ${esc(nameOf(i.created_by))} · ${days === 0 ? 'today' : `${days} ${days === 1 ? 'day' : 'days'} ago`}</small></div>
+        <small class="muted"> · ${esc(nameOf(i.created_by))} · ${days === 0 ? 'today' : `${days} ${days === 1 ? 'day' : 'days'} ago`}</small>
+        ${i.kind === 'mats' && !matsSorted(i) ? matsFitHTML(v) : ''}</div>
       <div class="dent-actions"><button class="btn small accent" data-act="issuefix" data-issue="${i.id}">${ICON.check} Fixed</button></div>
     </div>`;
   };
@@ -4137,12 +4243,83 @@ function renderSupplies() {
       <div class="sheet-actions" style="position:static"><button type="submit" class="btn primary">${ICON.plus} Add to list</button></div>
     </form>
     ${isAdmin() ? '<div class="report-actions no-print"><button type="button" class="btn" id="printSuppliesBtn">🖨 Print supplies list</button></div>' : ''}
+    <div id="supplyMatsHint"></div>
     ${section('needed', 'Needed', 'Nothing needed right now. 👍')}
+    ${matsShelfHTML()}
     ${section('ordered', 'Ordered', 'Nothing on order.')}
     ${section('done', 'Got it (last 14 days)', 'Nothing received recently.')}`;
 }
 
+// The mats shelf (Supplies screen): what's there, add sets, take one
+function matsShelfHTML() {
+  if (!S.matsReady) return '';
+  const groups = new Map();
+  for (const m of S.mats) {
+    const k = `${norm(m.make)}|${norm(m.model)}|${norm(m.description)}|${norm(m.place)}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(m);
+  }
+  const rows = [...groups.values()].sort((a, b) => matName(a[0]).localeCompare(matName(b[0])));
+  return `<div class="panel" id="matsPanel">
+    <h2>🟫 Mats on the shelf <span class="badge grey">${S.mats.length}</span></h2>
+    <p class="muted">Mats we already have. When someone notes <b>Mats missing</b> on a car they fit, the app tells them — so we don’t buy them again.</p>
+    ${rows.length ? rows.map(list => {
+      const m = list[0];
+      const mine = isAdmin() || m.added_by === S.me?.id;
+      return `<div class="supply-row" data-mat-id="${m.id}">
+        <div class="supply-main"><strong>${esc(matName(m))}</strong>${list.length > 1 ? `<span class="supply-qty">× ${list.length} sets</span>` : ''}
+          ${clean(m.description) ? `<div class="supply-note">${esc(m.description)}</div>` : ''}
+          <div class="supply-meta">${clean(m.place) ? `${esc(m.place)} · ` : ''}added by ${esc(nameOf(m.added_by))} · ${esc(fmtDate(m.added_at))}</div></div>
+        <div class="supply-actions">
+          <button type="button" class="btn small ghost" data-mat-do="used" title="Taken without a car in the app">Used one</button>
+          ${mine ? '<button type="button" class="btn small ghost danger" data-mat-do="delete" aria-label="Remove one set">✕</button>' : ''}
+        </div>
+      </div>`;
+    }).join('') : '<p class="muted">No mats on the shelf.</p>'}
+    <details class="mats-add"${S.mats.length ? '' : ' open'}><summary class="link-btn">+ Add mats to the shelf</summary>
+      <form class="form" id="matForm" autocomplete="off">
+        <div class="grid2">
+          <label>Make<input name="make" list="matMakes" autocapitalize="words" placeholder="blank = fits any car"></label>
+          <label>Model<input name="model" autocapitalize="words" placeholder="blank = any model"></label>
+        </div>
+        <datalist id="matMakes">${knownMakes().map(m => `<option value="${esc(m)}">`).join('')}</datalist>
+        <label>What are they?<input name="description" placeholder="e.g. black carpet, front + rear"></label>
+        <div class="grid2">
+          <label>Where?<input name="place" placeholder="e.g. valet room shelf"></label>
+          <label>How many sets?<input name="sets" type="number" min="1" max="20" value="1" inputmode="numeric"></label>
+        </div>
+        <div class="sheet-actions" style="position:static"><button type="submit" class="btn primary">${ICON.plus} Add to the shelf</button></div>
+      </form>
+    </details>
+  </div>`;
+}
+
+// Asking for mats on the supplies list while some are on the shelf → a reminder
+function drawSupplyMatsHint(text) {
+  const box = $('#supplyMatsHint');
+  if (!box) return;
+  box.innerHTML = S.matsReady && S.mats.length && /\bmats?\b|tapete/i.test(text)
+    ? `<div class="mats-hint"><strong>🟫 There ${S.mats.length === 1 ? 'is 1 set' : `are ${S.mats.length} sets`} of mats on the shelf already</strong> — check <a href="#matsPanel">the list below</a> before ordering.</div>`
+    : '';
+}
+
+async function onMatsSubmit(form) {
+  const f = form.elements;
+  const row = { make: clean(f.make.value), model: clean(f.model.value), description: clean(f.description.value), place: clean(f.place.value) };
+  const sets = Math.min(20, Math.max(1, Number(f.sets.value) || 1));
+  if (!row.make && !row.description) return toast('Write the make, or what the mats are.', { error: true });
+  const btn = form.querySelector('[type=submit]');
+  btn.disabled = true;
+  const { error } = await sb.from('mat_stock').insert(Array.from({ length: sets }, () => ({ ...row })));
+  btn.disabled = false;
+  if (error) return toast(errorText(error), { error: true });
+  await loadMats();
+  renderAll();
+  toast(`${plural(sets, 'set')} of mats added to the shelf`);
+}
+
 async function onSuppliesSubmit(e) {
+  if (e.target.id === 'matForm') { e.preventDefault(); return onMatsSubmit(e.target); }
   if (e.target.id !== 'supplyForm') return;
   e.preventDefault();
   const f = e.target.elements;
@@ -4161,6 +4338,16 @@ async function onSuppliesSubmit(e) {
 
 async function onSuppliesClick(e) {
   if (e.target.closest('#printSuppliesBtn')) return printSuppliesList();
+  const mb = e.target.closest('[data-mat-do]');
+  if (mb) {
+    const id = Number(mb.closest('[data-mat-id]').dataset.matId);
+    if (!confirmTap(mb, mb.dataset.matDo === 'delete' ? 'Remove?' : 'Sure?')) return;
+    const q = sb.from('mat_stock');
+    const { error } = mb.dataset.matDo === 'delete' ? await q.delete().eq('id', id) : await q.update({ used_at: new Date().toISOString() }).eq('id', id);
+    if (error) return toast(errorText(error), { error: true });
+    await loadMats();
+    return renderAll();
+  }
   const btn = e.target.closest('[data-supply]');
   if (!btn) return;
   const id = Number(btn.closest('[data-supply-id]').dataset.supplyId);
@@ -4266,7 +4453,8 @@ const HELP = [
   { id: 'issues', title: 'Issues (mats, wheels, missing parts…)', tabs: ['stock', 'sold', 'in_prep', 'issues'], body: `
     <p>Found a problem on a car? Tap <b>+ Issue</b> on its card, pick what it is (<b>🟫 Mats missing</b>, <b>🛞 Wheels / alloys</b>, <b>🧩 Missing interior part</b>, <b>🎨 Scratch / paint</b> or <b>Other</b>) and write the details.</p>
     <p>The <b>Issues</b> tab lists every open problem by type — sold cars going out soonest first — with <b>✓ Fixed</b> on each line and a print button.</p>
-    <p>It shows on the card in orange for everyone until someone taps it and marks it <b>Fixed</b> — then it goes on the car’s work log.</p>` },
+    <p>It shows on the card in orange for everyone until someone taps it and marks it <b>Fixed</b> — then it goes on the car’s work log.</p>
+    <p><b>Mats:</b> if a set on the shelf may fit the car, the app says so — tap <b>Use for this car</b> instead of ordering. The issue then says where they are.</p>` },
   { id: 'worklog', title: 'Work log (what was done)', tabs: ['stock', 'sold', 'in_prep', 'delivered'], body: `
     <p>Did something on a car that isn’t one of the job bubbles (e.g. <i>grille wrapped</i>, <i>diffuser sprayed</i>)? Tap <b>🔧 Log</b> on its card and write it. Your name and the date are added by themselves.</p>
     <p>The card shows the latest entry; tap it to see everything done on that car. Fixed issues are logged automatically.</p>` },
@@ -4288,7 +4476,8 @@ const HELP = [
   { id: 'supplies', title: 'Asking for supplies', tabs: [], body: `
     <p>Tap the <b>box icon</b> at the top, write what you need and how many, and tap <b>Add to list</b>.</p>
     <p>The sales team and the person who buys supplies get a notification straight away, and at 8am the buyer gets what’s still to buy.</p>
-    <p>The manager marks it <b>Ordered</b>, and <b>Got it</b> when it arrives. The manager can print the list.</p>` },
+    <p>The manager marks it <b>Ordered</b>, and <b>Got it</b> when it arrives. The manager can print the list.</p>
+    <p><b>🟫 Mats on the shelf</b> (same screen): the mats we already have. Add sets with <b>+ Add mats to the shelf</b> (make and model, or blank for any car). When someone notes <b>Mats missing</b> on a car they fit, the app tells them.</p>` },
   { id: 'admin', title: 'Adding & selling cars (managers)', tabs: ['stock'], admin: true, body: `
     <p><b>+ New stock</b> (Stock tab): plate, make, model, colour, VRT / NCT, <b>the services the car needs</b> (or <b>All</b>) and On site / Due in. Already sold? Tick <b>Already sold</b>. Scratches, scuffed wheels or missing parts? Tick them under <b>Issues on arrival</b>.</p>
     <p><b>Mark sold</b> on a stock car and pick the delivery date and time. A car that arrives already sold: <b>+ New stock</b> → <b>Already sold</b>.</p>
@@ -4568,6 +4757,7 @@ function wireUi() {
   $('#suppliesBtn').addEventListener('click', () => setView('supplies'));
   $('#suppliesView').addEventListener('submit', onSuppliesSubmit);
   $('#suppliesView').addEventListener('click', onSuppliesClick);
+  $('#suppliesView').addEventListener('input', e => { if (e.target.name === 'supply_item') drawSupplyMatsHint(e.target.value); });
   $('#helpBtn').innerHTML = ICON.help;
   $('#helpBtn').addEventListener('click', openHelp);
   $('#backBtn').addEventListener('click', () => setView('main'));
@@ -4678,7 +4868,7 @@ async function loadChanges() {
   S.profiles = new Map(p.data.map(x => [x.id, x]));
   S.me = S.profiles.get(S.session.user.id) ?? S.me;
   S.syncedAt = mark;
-  await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMyMonth(), loadIssues(), loadWorkLog(), loadTrades().then(refreshPhotoUrls)]);
+  await Promise.all([refreshPhotoUrls(), loadSupplies(), loadMats(), loadMyMonth(), loadIssues(), loadWorkLog(), loadTrades().then(refreshPhotoUrls)]);
 }
 
 async function refreshData() {
