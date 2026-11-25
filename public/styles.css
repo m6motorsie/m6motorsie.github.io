@@ -934,3 +934,31 @@ body.fabs-away .fab-row, body.fabs-away .help-fab { transform: translateY(140%);
 .queue-no { display: inline-block; min-width: 30px; font-weight: 800; font-size: 15px; color: var(--muted); }
 .polish-line .svc { min-width: 150px; }
 .issue-line .dent-fix small { font-weight: 400; }
+
+/* Battery on hybrids / electrics (v161, 052_*.sql) — next to the plate, tap to check */
+.plate-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.batt {
+  display: inline-flex; align-items: center; gap: 3px; height: 26px; padding: 0 7px 0 5px;
+  border: 1.5px solid currentColor; border-radius: 7px; background: transparent;
+  font: 700 11px/1 -apple-system, BlinkMacSystemFont, Inter, sans-serif; letter-spacing: .02em;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.batt svg { width: 20px; height: 20px; flex: none; }
+.batt.full { color: var(--done-fg); background: var(--done-bg); }
+.batt.half { color: var(--doing-fg); background: var(--doing-bg); }
+.batt.low  { color: var(--issue-fg); background: var(--issue-bg); }
+.batt.flat { color: #fff; background: var(--urgent); border-color: var(--urgent); }
+.batt.none { color: var(--muted); border-style: dashed; }
+.batt.stale { opacity: .6; }
+.batt:active { transform: scale(.94); }
+.batt-pick { display: grid; gap: 8px; }
+.batt-opt {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; text-align: left;
+  border: 1.5px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); cursor: pointer;
+}
+.batt-opt .batt { pointer-events: none; height: 34px; padding: 0 6px; }
+.batt-opt .batt svg { width: 26px; height: 26px; }
+.batt-opt small { display: block; color: var(--muted); font-weight: 400; margin-top: 2px; }
+.batt-opt.on { border-color: var(--text); box-shadow: 0 0 0 1px var(--text) inset; }
+.batt-opt:disabled { opacity: .5; }
+@media (prefers-reduced-motion: reduce) { .batt:active { transform: none; } }

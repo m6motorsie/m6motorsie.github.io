@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '160';
+const APP_VERSION = '161';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -1329,12 +1329,79 @@ async function cycleReady(v, btn, next = v.ready_state === 'doing' ? 'done' : 'd
 }
 
 // Photo, plate, make / model and colour at the top of a car's card
+// ---------------------------------------------------------------------
+// Battery (052_*.sql): hybrids and electrics get a battery next to the plate.
+// Anyone on staff taps it and picks Full / Half / Low / Flat; the DB stamps
+// who and when and writes it on the work log.
+// ---------------------------------------------------------------------
+const POWERTRAINS = [['', 'Petrol / diesel'], ['hybrid', 'Hybrid'], ['phev', 'Plug-in hybrid'], ['ev', 'Electric']];
+const BATTERY = [
+  ['full', 'Full', 'Charged — ready to go'],
+  ['half', 'Half', 'About half'],
+  ['low', 'Low', 'Needs a charge / a drive soon'],
+  ['flat', 'Flat', 'Won’t start — needs a jump or a charge'],
+];
+const BATTERY_STALE_DAYS = 7;  // after this the last check is shown faded with a "?"
+const hasBattery = v => !!v.powertrain;
+const batteryReady = () => [...S.vehicles.values()].some(v => 'powertrain' in v);
+const powertrainName = k => POWERTRAINS.find(([key]) => key === k)?.[1] || '';
+const batteryName = k => BATTERY.find(([key]) => key === k)?.[1] || '';
+
+function batteryIcon(level) {
+  const bars = { full: 3, half: 2, low: 1, flat: 0 }[level] ?? -1;
+  const cells = [0, 1, 2].map(i => `<rect x="${4.5 + i * 4.5}" y="9" width="3.5" height="6" rx=".8" fill="currentColor" stroke="none" opacity="${i < bars ? 1 : 0}"/>`).join('');
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="6.5" width="17.5" height="11" rx="2.5"/><path d="M22 10.5v3" stroke-linecap="round"/>${cells}${level === 'flat' ? '<path d="M8 9.5l5 5M13 9.5l-5 5" stroke-linecap="round"/>' : ''}</svg>`;
+}
+
+function batteryHTML(v) {
+  if (!hasBattery(v) || v.status === 'delivered') return '';
+  const lvl = v.battery_level;
+  const stale = lvl && daysSince(v.battery_at) >= BATTERY_STALE_DAYS;
+  const label = lvl ? batteryName(lvl) : 'Check';
+  const title = lvl ? `${powertrainName(v.powertrain)} · battery ${label.toLowerCase()} · ${nameOf(v.battery_by)}, ${fmtDate(v.battery_at)}` : `${powertrainName(v.powertrain)} · battery not checked yet`;
+  return `<button type="button" class="batt ${lvl || 'none'}${stale ? ' stale' : ''}" data-act="battery" title="${esc(title)}" aria-label="${esc(title)}">${batteryIcon(lvl)}<span>${esc(label)}${stale ? '?' : ''}</span></button>`;
+}
+
+function openBatterySheet(v) {
+  const car = [v.make, v.model].map(clean).filter(Boolean).join(' ');
+  const days = v.battery_at ? daysSince(v.battery_at) : 0;
+  const last = v.battery_level
+    ? `Last check: <strong>${esc(batteryName(v.battery_level))}</strong> · ${esc(nameOf(v.battery_by))} · ${esc(fmtDate(v.battery_at))}${days >= 1 ? ` (${days} day${days === 1 ? '' : 's'} ago)` : ''}`
+    : 'Not checked yet.';
+  const sheet = openSheet(`<div class="form">
+    ${sheetHead('🔋 Battery')}
+    <div class="hold-car">${plateHTML(v)}<span class="muted">${esc(car)} · ${esc(powertrainName(v.powertrain))}</span></div>
+    <p class="muted">${last}</p>
+    <div class="batt-pick">${BATTERY.map(([k, label, hint]) => `<button type="button" class="batt-opt${v.battery_level === k ? ' on' : ''}" data-level="${k}">
+      <span class="batt ${k}">${batteryIcon(k)}</span><span><strong>${label}</strong><small>${hint}</small></span></button>`).join('')}</div>
+    <p class="form-error" id="battError" hidden></p>
+    <div class="sheet-actions"><button type="button" class="btn ghost" data-close>Close</button></div>
+  </div>`);
+  $('.batt-pick', sheet).addEventListener('click', async e => {
+    const opt = e.target.closest('[data-level]');
+    if (!opt) return;
+    const level = opt.dataset.level;
+    if (level === v.battery_level && daysSince(v.battery_at) < 1) return closeSheet();  // nothing new
+    for (const b of $$('.batt-opt', sheet)) b.disabled = true;
+    try {
+      await updateVehicle(v.id, { battery_level: level });
+      closeSheet();
+      renderAll();
+      loadWorkLog().then(renderAll);
+      toast(`🔋 Battery: ${batteryName(level)} — saved`);
+    } catch (err) {
+      for (const b of $$('.batt-opt', sheet)) b.disabled = false;
+      const el = $('#battError', sheet); el.textContent = errorText(err); el.hidden = false;
+    }
+  });
+}
+
 function vehicleHeadHTML(v, placeholderAttrs = '', aside = '') {
   const url = photoSrc(v.photo_path);
   return `<div class="card-head">
       ${url ? `<img class="thumb" src="${esc(url)}" alt="" data-act="photo" loading="lazy">` : `<span class="thumb placeholder"${placeholderAttrs}>${ICON.car}</span>`}
       <div class="card-title">
-        ${plateHTML(v)}
+        ${hasBattery(v) && v.status !== 'delivered' ? `<div class="plate-row">${plateHTML(v)}${batteryHTML(v)}</div>` : plateHTML(v)}
         <div class="vehicle-name">${esc([v.make, v.model].map(clean).filter(Boolean).join(' ') || 'Unknown vehicle')} ${colourHTML(v.color)}</div>
       </div>
       ${aside}
@@ -1766,6 +1833,7 @@ async function onListClick(e) {
   if (act === 'deliverydate') return isAdmin() && openDeliveryDateForm(v);
   if (act === 'sell') return salesManager() && openVehicleForm({ vehicle: v, convert: true });
   if (act === 'photo') return openPhoto(v);
+  if (act === 'battery') return openBatterySheet(v);  // anyone on staff (052_*.sql)
   if (act === 'issues') return openIssueSheet(v);
   if (act === 'worklog') return openWorkSheet(v);
   if (act === 'loan') return isAdmin() && openHoldForm(v, act);  // loans are admin-only (also in the DB)
@@ -2488,6 +2556,8 @@ function openVehicleForm({ vehicle = null, convert = false } = {}) {
     </div>
     <label>Colour<input name="color" value="${esc(v.color)}" autocapitalize="words"></label>
     <div class="swatches" id="swatches">${COLOURS.map(([n, h]) => `<button type="button" class="swatch" data-colour="${n}"><span class="dot" style="background:${h}"></span>${n}</button>`).join('')}</div>
+    ${batteryReady() ? `<div class="section-label">Engine</div>
+    <div class="pills" id="ptPills">${POWERTRAINS.map(([k, label]) => `<label class="pill"><input type="radio" name="powertrain" value="${k}" ${(v.powertrain || '') === k ? 'checked' : ''}><span>${k ? '🔋 ' : ''}${label}</span></label>`).join('')}</div>` : ''}
     <label>VRT / NCT<input name="vrt_nct" value="${esc(v.vrt_nct)}" placeholder="e.g. done, VRT pending, 12 Oct"></label>
     <fieldset><legend>Services needed${isNew ? ' — pick at least one' : ''}</legend><div class="pills" id="svcPills">
       <label class="pill all"><input type="checkbox" id="svcAll" ${CLEANING.every(s => services.includes(s.key)) ? 'checked' : ''}><span>All</span></label>
@@ -2616,6 +2686,8 @@ function openVehicleForm({ vehicle = null, convert = false } = {}) {
       vrt_nct: clean(f.vrt_nct.value),
       bodykit_note: clean(f.bodykit_note.value),
     };
+    const pt = form.querySelector('[name=powertrain]:checked');
+    if (pt) row.powertrain = pt.value;  // (after 052_*.sql)
     if (!row.reg_ie && !row.reg_imp) return showError('Enter at least one registration (IRL or IMP).');
     // (an existing car keeping its plates isn't checked again)
     const samePlates = !isNew && plateKey(row.reg_ie) === plateKey(v.reg_ie) && plateKey(row.reg_imp) === plateKey(v.reg_imp);
@@ -3700,6 +3772,8 @@ function renderOverview() {
   }
   for (const v of where('loan')) if (v.loan_due && dayDiff(v.loan_due) < 0) att.push([2, v, 'loan', `Loan overdue — was due ${dayName(v.loan_due)}`]);
   for (const v of where('bodyshop')) if (v.body_due && dayDiff(v.body_due) < 0) att.push([2, v, 'bodyshop', `Bodyshop overdue — was due ${dayName(v.body_due)}`]);
+  for (const v of live) if (hasBattery(v) && ['low', 'flat'].includes(v.battery_level))
+    att.push([v.battery_level === 'flat' ? 1 : 2, v, tabOf(v), `Battery ${v.battery_level} — ${v.battery_level === 'flat' ? 'needs a jump / charge' : 'charge it or take it for a drive'}`]);
   for (const v of stock) if (daysSince(v.created_at) >= 60) att.push([3, v, tabOf(v), `In stock ${daysSince(v.created_at)} days`]);
   if (canTrade()) {
     // Trade cars: shown with their own plate; tapping opens the Trade tab
@@ -4477,6 +4551,10 @@ const HELP = [
     <p>The <b>Issues</b> tab lists every open problem by type — sold cars going out soonest first — with <b>✓ Fixed</b> on each line and a print button.</p>
     <p>It shows on the card in orange for everyone until someone taps it and marks it <b>Fixed</b> — then it goes on the car’s work log.</p>
     <p><b>Mats:</b> if a set on the shelf may fit the car, the app says so — tap <b>Use for this car</b> instead of ordering. The issue then says where they are.</p>` },
+  { id: 'battery', title: '🔋 Battery (hybrid / electric)', tabs: ['stock', 'sold', 'in_prep'], body: `
+    <p>Hybrid and electric cars have a <b>battery</b> next to the plate. Started one, moved it or charged it? <b>Tap the battery</b> and pick <b>Full</b>, <b>Half</b>, <b>Low</b> or <b>Flat</b> (won’t start). Anyone can do it — your name and the time are saved, and it goes on the car’s work log.</p>
+    <p>Green = full, amber = half, orange = low, red = flat, dashed “Check” = nobody has checked it yet. A faded one with “?” wasn’t checked for a week.</p>
+    <p>A manager says which cars are hybrid / electric in the car form (<b>More → Edit → Engine</b>).</p>` },
   { id: 'worklog', title: 'Work log (what was done)', tabs: ['stock', 'sold', 'in_prep', 'delivered'], body: `
     <p>Did something on a car that isn’t one of the job bubbles (e.g. <i>grille wrapped</i>, <i>diffuser sprayed</i>)? Tap <b>🔧 Log</b> on its card and write it. Your name and the date are added by themselves.</p>
     <p>The card shows the latest entry; tap it to see everything done on that car. Fixed issues are logged automatically.</p>` },
