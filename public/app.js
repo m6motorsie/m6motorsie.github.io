@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '157';
+const APP_VERSION = '158';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -2247,8 +2247,14 @@ async function purgeOld() {
 // ---------------------------------------------------------------------
 // Sheets
 // ---------------------------------------------------------------------
+// Sheets slide/zoom in and out like a Mac / iPhone sheet; a sheet opened while
+// the last one is still closing just takes over.
+let sheetClosing = null;
+const calmMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 function openSheet(html) {
   const sheet = $('#sheet');
+  clearTimeout(sheetClosing); sheetClosing = null;
+  $('#sheetBackdrop').classList.remove('closing');
   sheet.onchange = null;  // drop handlers left by the previous sheet
   sheet.innerHTML = html;
   $('#sheetBackdrop').hidden = false;
@@ -2260,9 +2266,25 @@ function openSheet(html) {
 }
 
 function closeSheet() {
-  $('#sheetBackdrop').hidden = true;
-  $('#sheet').innerHTML = '';
-  document.body.style.overflow = '';
+  const back = $('#sheetBackdrop');
+  const done = () => {
+    sheetClosing = null;
+    back.classList.remove('closing');
+    back.hidden = true;
+    $('#sheet').innerHTML = '';
+    document.body.style.overflow = '';
+  };
+  if (back.hidden || calmMotion()) return done();
+  clearTimeout(sheetClosing);
+  back.classList.add('closing');
+  sheetClosing = setTimeout(done, 200);
+}
+
+// Tapping a tab: the new list fades up into place
+function fadeInList() {
+  if (calmMotion()) return;
+  $('#list')?.animate([{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
+    { duration: 260, easing: 'cubic-bezier(.32,.72,0,1)' });
 }
 
 const sheetHead = title => `<div class="sheet-head"><h2>${esc(title)}</h2><button type="button" class="icon-btn" data-close aria-label="Close">${ICON.close}</button></div>`;
@@ -4721,7 +4743,7 @@ function wireUi() {
   wireFabHide();
   $('.tabs').addEventListener('click', e => {
     const b = e.target.closest('[data-tab]');
-    if (b) { switchTab(b.dataset.tab); window.scrollTo(0, 0); }
+    if (b) { const changed = b.dataset.tab !== S.tab; switchTab(b.dataset.tab); window.scrollTo(0, 0); if (changed) fadeInList(); }
   });
   const showClear = () => { $('#searchClear').hidden = !S.search; };
   $('#search').addEventListener('input', e => { S.search = e.target.value; showClear(); renderList(); });

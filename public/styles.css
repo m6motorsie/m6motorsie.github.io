@@ -47,7 +47,9 @@ body {
   overflow-x: clip;
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.4 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* Mac / iPhone: Apple's own font (San Francisco); Inter everywhere else */
+  font: 15px/1.4 -apple-system, BlinkMacSystemFont, Inter, system-ui, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
 }
 [hidden] { display: none !important; }
@@ -405,6 +407,52 @@ main .tabs, main .toolbar { max-width: 900px; margin-left: auto; margin-right: a
   .sheet { border-radius: 18px; }
 }
 @keyframes up { from { transform: translateY(24px); opacity: .6; } }
+
+/* ---------- Mac-style motion & glass (v158) ---------- */
+:root { --spring: cubic-bezier(.32,.72,0,1); }
+/* Frosted glass top bar and tabs: the cards blur behind them when scrolling */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .topbar, .tabs {
+    background: rgba(11,11,12,.78);
+    -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
+  }
+  .sheet-backdrop { -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+  .toasts .toast { background: rgba(31,33,38,.86); -webkit-backdrop-filter: saturate(180%) blur(18px); backdrop-filter: saturate(180%) blur(18px); }
+  .toasts .toast.error { background: rgba(155,28,31,.9); }
+}
+.tabs button { transition: color .2s, border-color .25s var(--spring); }
+/* Sheets: fade the backdrop, slide up on phones / zoom in like a Mac window on wider screens */
+.sheet-backdrop { animation: fade-in .22s ease-out; }
+.sheet { animation: sheet-up .42s var(--spring); }
+@media (min-width: 640px) { .sheet { animation: sheet-zoom .32s var(--spring); } }
+.sheet-backdrop.closing { animation: fade-out .2s ease-in forwards; pointer-events: none; }
+.sheet-backdrop.closing .sheet { animation: sheet-down .2s ease-in forwards; }
+@media (min-width: 640px) { .sheet-backdrop.closing .sheet { animation: sheet-shrink .2s ease-in forwards; } }
+@keyframes fade-in { from { background: rgba(0,0,0,0); } }
+@keyframes fade-out { to { background: rgba(0,0,0,0); } }
+@keyframes sheet-up { from { transform: translateY(100%); } }
+@keyframes sheet-down { to { transform: translateY(100%); } }
+@keyframes sheet-zoom { from { transform: scale(.94); opacity: 0; } }
+@keyframes sheet-shrink { to { transform: scale(.96); opacity: 0; } }
+/* Toasts drop in like a Mac notification */
+.toasts .toast { animation: toast-in .45s var(--spring); }
+@keyframes toast-in { from { transform: translateY(16px) scale(.96); opacity: 0; } }
+/* Buttons sink a little when pressed */
+.btn, .svc, .fab, .icon-btn, .ov-tile { transition: transform .18s var(--spring), background-color .15s, box-shadow .2s; }
+.btn:active:not(:disabled), .svc:active, .fab:active, .icon-btn:active, .ov-tile:active { transform: scale(.96); }
+/* Cards lift under the mouse (Mac trackpad), not on phones */
+.card { transition: transform .25s var(--spring), box-shadow .25s; }
+@media (hover: hover) and (pointer: fine) {
+  .card:hover { transform: translateY(-2px); box-shadow: 0 2px 4px rgba(0,0,0,.06), 0 12px 28px rgba(0,0,0,.1); }
+  .btn:hover:not(:disabled) { filter: brightness(.97); }
+}
+/* The More menu pops open from its button */
+.card-more[open] .card-more-menu { animation: pop .22s var(--spring); transform-origin: top left; }
+@keyframes pop { from { transform: scale(.92); opacity: 0; } }
+/* Less motion when the phone / Mac asks for it */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
 .sheet-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .sheet-head h2 { flex: 1; margin: 0; font-size: 18px; }
 .form { display: grid; gap: 12px; }
