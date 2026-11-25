@@ -433,10 +433,11 @@ main .tabs, main .toolbar { max-width: 900px; margin-left: auto; margin-right: a
     .tabs::before { background: rgba(11,11,12,.78); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
   }
 }
-/* Counts always sit under the label, so a short label (Loan) lines up with the rest */
-.tabs .count { display: block; width: fit-content; margin: 3px auto 0; }
-.tabs .count.today, .tabs button[data-tab=sold] .count:not(.today), .tabs button[data-tab=stock] .count:not(.today) { display: inline-block; }
-.tabs .count.today { margin: 3px 0 0 3px; }
+/* Counts always on their own line under the label (a short label like Loan lines up with
+   the rest; Stock's two counts sit side by side): the ::after is a full-width line break */
+.tabs button { display: flex; flex-wrap: wrap; justify-content: center; align-content: flex-start; column-gap: 3px; }
+.tabs button::after { content: ""; flex-basis: 100%; height: 0; order: 1; }
+.tabs .count, .tabs .count.today { order: 2; display: inline-block; width: auto; margin: 3px 0 0; }
 /* Sheets: fade the backdrop, slide up on phones / zoom in like a Mac window on wider screens */
 .sheet-backdrop { animation: fade-in .22s ease-out; }
 .sheet { animation: sheet-up .42s var(--spring); }
