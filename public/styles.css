@@ -421,6 +421,22 @@ main .tabs, main .toolbar { max-width: 900px; margin-left: auto; margin-right: a
   .toasts .toast.error { background: rgba(155,28,31,.9); }
 }
 .tabs button { transition: color .2s, border-color .25s var(--spring); }
+/* Wide screens: the tab buttons stay centred (900px) but the bar itself runs edge to edge,
+   so no cut-off ends with cards showing beside it */
+@media (min-width: 641px) {
+  .tabs { background: transparent !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+  .tabs::before {
+    content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 100vw; transform: translateX(-50%);
+    z-index: -1; pointer-events: none; background: var(--brand);
+  }
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .tabs::before { background: rgba(11,11,12,.78); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
+  }
+}
+/* Counts always sit under the label, so a short label (Loan) lines up with the rest */
+.tabs .count { display: block; width: fit-content; margin: 3px auto 0; }
+.tabs .count.today, .tabs button[data-tab=sold] .count:not(.today), .tabs button[data-tab=stock] .count:not(.today) { display: inline-block; }
+.tabs .count.today { margin: 3px 0 0 3px; }
 /* Sheets: fade the backdrop, slide up on phones / zoom in like a Mac window on wider screens */
 .sheet-backdrop { animation: fade-in .22s ease-out; }
 .sheet { animation: sheet-up .42s var(--spring); }
