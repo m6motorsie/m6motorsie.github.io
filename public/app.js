@@ -6,7 +6,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN, VAPID_PUBLIC_KEY } from 
 // ---------------------------------------------------------------------
 // Shown in the help sheet, so anyone can check their phone has the latest app.
 // Keep in step with the ?v= in index.html.
-const APP_VERSION = '161';
+const APP_VERSION = '162';
 const BUCKET = 'vehicle-photos';
 const PURGE_DAYS = 30;
 
@@ -899,13 +899,13 @@ function workLogHTML(v) {
 // with a set that fits → the app says so, and "Use for this car" keeps it for
 // that car (the issue then says "from the shelf") — so nobody orders them again.
 // ---------------------------------------------------------------------
-// Fits: same make (or a universal set), and the same model or "any model"
+// Fits: same make (blank = any make) and the same model (blank = any model);
+// a set with neither is universal
 function matsFor(make, model) {
   const mk = norm(make), md = norm(model);
   return S.mats.filter(m => {
-    if (!norm(m.make)) return true;
-    if (!mk || norm(m.make) !== mk) return false;
     const mm = norm(m.model);
+    if (norm(m.make) && norm(m.make) !== mk) return false;
     return !mm || (!!md && (md.includes(mm) || mm.includes(md)));
   }).sort((a, b) => (!norm(a.make) - !norm(b.make)) || (!norm(a.model) - !norm(b.model)));
 }
@@ -1381,7 +1381,10 @@ function openBatterySheet(v) {
     const opt = e.target.closest('[data-level]');
     if (!opt) return;
     const level = opt.dataset.level;
-    if (level === v.battery_level && daysSince(v.battery_at) < 1) return closeSheet();  // nothing new
+    if (level === v.battery_level && daysSince(v.battery_at) < 1) {  // nothing new to save
+      closeSheet();
+      return toast(`Already marked ${batteryName(level)} today by ${nameOf(v.battery_by)}`);
+    }
     for (const b of $$('.batt-opt', sheet)) b.disabled = true;
     try {
       await updateVehicle(v.id, { battery_level: level });
@@ -4361,14 +4364,15 @@ function matsShelfHTML() {
     <p class="muted">Mats we already have. When someone notes <b>Mats missing</b> on a car they fit, the app tells them — so we don’t buy them again.</p>
     ${rows.length ? rows.map(list => {
       const m = list[0];
-      const mine = isAdmin() || m.added_by === S.me?.id;
+      // ✕ removes a set this person may delete: any for admins, else one they added
+      const mine = isAdmin() ? m : list.find(x => x.added_by === S.me?.id);
       return `<div class="supply-row" data-mat-id="${m.id}">
         <div class="supply-main"><strong>${esc(matName(m))}</strong>${list.length > 1 ? `<span class="supply-qty">× ${list.length} sets</span>` : ''}
           ${clean(m.description) ? `<div class="supply-note">${esc(m.description)}</div>` : ''}
           <div class="supply-meta">${clean(m.place) ? `${esc(m.place)} · ` : ''}added by ${esc(nameOf(m.added_by))} · ${esc(fmtDate(m.added_at))}</div></div>
         <div class="supply-actions">
           <button type="button" class="btn small ghost" data-mat-do="used" title="Taken without a car in the app">Used one</button>
-          ${mine ? '<button type="button" class="btn small ghost danger" data-mat-do="delete" aria-label="Remove one set">✕</button>' : ''}
+          ${mine ? `<button type="button" class="btn small ghost danger" data-mat-do="delete" data-mat-del="${mine.id}" aria-label="Remove one set">✕</button>` : ''}
         </div>
       </div>`;
     }).join('') : '<p class="muted">No mats on the shelf.</p>'}
@@ -4436,7 +4440,7 @@ async function onSuppliesClick(e) {
   if (e.target.closest('#printSuppliesBtn')) return printSuppliesList();
   const mb = e.target.closest('[data-mat-do]');
   if (mb) {
-    const id = Number(mb.closest('[data-mat-id]').dataset.matId);
+    const id = Number(mb.dataset.matDel || mb.closest('[data-mat-id]').dataset.matId);
     if (!confirmTap(mb, mb.dataset.matDo === 'delete' ? 'Remove?' : 'Sure?')) return;
     const q = sb.from('mat_stock');
     const { error } = mb.dataset.matDo === 'delete' ? await q.delete().eq('id', id) : await q.update({ used_at: new Date().toISOString() }).eq('id', id);

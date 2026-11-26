@@ -19,7 +19,8 @@ self.addEventListener('notificationclick', event => {
   const url = new URL(event.notification.data?.url || './', self.registration.scope).href;
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    const open = windows.find(w => w.url.startsWith(self.registration.scope));
+    // (not the private calendar at /calendar/, which is inside the same scope)
+    const open = windows.find(w => w.url.startsWith(self.registration.scope) && !new URL(w.url).pathname.includes('/calendar/'));
     if (open) {
       await open.focus();
       open.postMessage({ type: 'open', url });
